@@ -38,6 +38,7 @@ if st.button("Train & tune"):
                 best_params = {"units": units, "dropout": dropout, "batch_size": batch_size}
                 best_model, best_history = candidate, hist.history
 
+    print(f"\n[5_Train] Best hyperparameters: {best_params} (val_loss={best_val_loss:.4f})")
     st.session_state.model = best_model  # used by every later page
     st.session_state.train_report = {
         "best_params": best_params,

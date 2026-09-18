@@ -36,6 +36,9 @@ if st.button("Compute SHAP values"):
     mean_abs = np.abs(shap_values).mean(axis=(0, 1))
     top_idx = int(np.argmax(mean_abs))
 
+    print(f"\n[7_Explain] SHAP computation finished.")
+    print(f"[7_Explain] Top feature identified: {features[top_idx]}")
+
     st.session_state.explain_report = {
         "global_importance": dict(zip(features, mean_abs.tolist())),
         "one_forecast": dict(zip(features, shap_values[0].sum(axis=0).tolist())),

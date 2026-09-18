@@ -22,7 +22,10 @@ edited = st.data_editor(default_df, num_rows="fixed")
 if st.button("Forecast next month"):
     X = st.session_state.scaler_X.transform(edited[cols]).reshape(1, lookback, len(cols))
     pred_scaled = st.session_state.model.predict(X)
-    st.session_state.forecast_report = float(st.session_state.scaler_y.inverse_transform(pred_scaled)[0][0])
+    result = float(st.session_state.scaler_y.inverse_transform(pred_scaled)[0][0])
+    print(f"\n[8_Forecast] Running forecast on input shape {X.shape}...")
+    print(f"[8_Forecast] Predicted arrivals: {result:,.0f}")
+    st.session_state.forecast_report = result
 
 # Displayed outside the button block, so the result is still here if you
 # leave this page and come back.

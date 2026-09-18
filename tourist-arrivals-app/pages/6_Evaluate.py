@@ -47,11 +47,14 @@ if st.button("Score on the test set"):
         [test_arrivals[i + lookback - SEASONAL_PERIOD] for i in range(n_windows)]
     ).reshape(-1, 1)
 
-    st.session_state.evaluate_report = pd.DataFrame({
+    report_df = pd.DataFrame({
         "LSTM": score(actual, pred),
         "Naive": score(actual, naive),
         "Seasonal naive": score(actual, seasonal_naive),
     })
+    print(f"\n[6_Evaluate] Evaluation Results:\n{report_df.to_string()}")
+
+    st.session_state.evaluate_report = report_df
 
 # Displayed outside the button block, so the result is still here if you
 # leave this page and come back.

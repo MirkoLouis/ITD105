@@ -45,6 +45,10 @@ if st.button("Run"):
     st.session_state.X_test_seq, st.session_state.y_test_seq = make_sequences(test_X, test_y, LOOKBACK)
     st.session_state.test_df = test_df  # kept for the Evaluate page's naive baselines
 
+    print(f"\n[4_Prepare] Train ratio: {train_ratio:.2f}")
+    print(f"[4_Prepare] X_train_seq shape: {st.session_state.X_train_seq.shape}")
+    print(f"[4_Prepare] X_test_seq shape: {st.session_state.X_test_seq.shape}")
+
     st.session_state.prepare_report = {
         "train_ratio": train_ratio,
         "train_rows": len(train_df),

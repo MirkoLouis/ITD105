@@ -20,10 +20,19 @@ if st.button("Run cleaning"):
     df = df.dropna(subset=["arrivals"])
     df = df.ffill()
 
+    # Manual correction for outlier row in Feb 2001 (~34.2 million)
+    df.loc[df["date"] == "2001-02-01", "arrivals"] = 190000
+
     q1, q3 = df["arrivals"].quantile([0.25, 0.75])
     iqr = q3 - q1
     lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
     flagged = df[(df["arrivals"] < lower) | (df["arrivals"] > upper)]
+
+    print(f"\n[2_Clean] Running cleaning...")
+    print(f"[2_Clean] Duplicates removed: {duplicates_removed}")
+    print(f"[2_Clean] Target NaN rows dropped: {target_nulls}")
+    print(f"[2_Clean] Max arrivals after manual fix: {df['arrivals'].max():,.0f}")
+    print(f"[2_Clean] Flagged outliers count: {len(flagged)}")
 
     st.session_state.clean_df = df  # used by every later page
     st.session_state.clean_report = {

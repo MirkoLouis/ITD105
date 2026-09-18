@@ -12,6 +12,8 @@ if "raw_df" not in st.session_state:
     )
 
 df = st.session_state.raw_df
+print(f"\n[1_Dataset] Loaded {len(df)} rows, {len(df.columns)} columns")
+print(f"[1_Dataset] Date range: {df['date'].min().date()} to {df['date'].max().date()}")
 st.write(f"{len(df)} rows, {len(df.columns)} columns")
 st.dataframe(df.head())
 

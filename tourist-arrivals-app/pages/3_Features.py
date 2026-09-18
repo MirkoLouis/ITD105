@@ -45,6 +45,10 @@ if st.button("Run Spearman + VIF"):
         vif_log.append({"dropped": drop_col, "vif": max_vif})
         X = X.drop(columns=[drop_col])
 
+    print(f"\n[3_Features] Spearman kept {len(kept)} features: {kept}")
+    print(f"[3_Features] VIF dropped {len(vif_log)} features: {[d['dropped'] for d in vif_log]}")
+    print(f"[3_Features] Final selected features ({len(X.columns)}): {list(X.columns)}")
+
     st.session_state.selected_features = list(X.columns)  # used by every later page
     st.session_state.feature_report = {"results": results, "vif_log": vif_log}
 
