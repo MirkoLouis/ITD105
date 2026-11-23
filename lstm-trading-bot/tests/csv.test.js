@@ -10,6 +10,7 @@ test('csvCell quotes commas, quotes and newlines', () => {
 });
 
 test('csvCell neutralises formula prefixes in strings but not numbers', () => {
+    // Every dangerous leading character must end up behind an apostrophe.
     for (const lead of ['=', '+', '-', '@', '\t', '\r']) assert.equal(csvCell(`${lead}1`).replace(/^"|"$/g, '')[0], "'");
     assert.equal(csvCell('=1+1'), "'=1+1");
     assert.equal(csvCell(-5.5), '-5.5');

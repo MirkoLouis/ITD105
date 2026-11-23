@@ -29,6 +29,7 @@ function normalizeTrade(trade) {
     // Reject an unknown side.
     if (trade.side !== 'BUY' && trade.side !== 'SELL') return null;
     // Reason is whitelisted because it is rendered and exported.
+    // Legacy saves written before reasons existed have none, so they default to SIGNAL.
     const reason = trade.reason ?? 'SIGNAL';
     // Reject a reason outside the whitelist.
     if (!TRADE_REASONS.includes(reason)) return null;
@@ -36,6 +37,7 @@ function normalizeTrade(trade) {
 }
 
 // Validates the benchmark; absent or malformed becomes null.
+// Ternary: keep the object only when both numbers are finite, else fall back to no benchmark.
 const normalizeBenchmark = (benchmark) =>
     (isPlainObject(benchmark) && isFiniteNumber(benchmark.startPrice) && isFiniteNumber(benchmark.btc) ? benchmark : null);
 
@@ -74,6 +76,7 @@ export function loadBotState(storage = globalThis.localStorage) {
     const trades = parsed.trades.map(normalizeTrade);
     // Any invalid trade invalidates the whole save.
     if (trades.some((trade) => trade === null)) return null;
+    // Each ternary below keeps a field only when it has the expected type, otherwise it falls back to a safe default.
     return {
         running: false,
         wallet: parsed.wallet,
