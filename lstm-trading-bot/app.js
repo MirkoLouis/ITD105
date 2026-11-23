@@ -1,6 +1,8 @@
 import { BzChart } from 'https://cdn.jsdelivr.net/gh/bonezegei/bzUI/dist/bzChart.min.js';
 import { TinyLSTM } from './tiny-lstm.js';
 import { createUnrollGraph } from './unroll-graph.js';
+import { createBot } from './trading-bot.js';
+import { createBotPanel } from './bot-ui.js';
 
 const SYMBOL = 'BTCUSDT';
 const HORIZON = 20;         // candles to forecast
@@ -292,6 +294,9 @@ function updateGraph() {
 
 buildGraph();
 
+const bot = createBot();
+const panel = createBotPanel({ bot, root: document.getElementById('bot-panel') });
+
 // ---- Live loop ----
 function render() {
   const prevView = chart.view;
@@ -316,6 +321,9 @@ async function tick() {
     if (!model) resetModel();
     forecast = trainAndForecast(closes, candles[candles.length - 1].time);
     predictions.set(candles[candles.length - 1].time + INTERVAL_MS[INTERVAL], forecast[0]);
+    const last = candles[candles.length - 1];
+    bot.onClosedCandle({ time: last.time, closeTime: last.time + INTERVAL_MS[INTERVAL], lastClose: last.c, forecastNext: forecast[0] });
+    panel.render(last.c);
     render();
     updateText();
     updateAccuracy();
