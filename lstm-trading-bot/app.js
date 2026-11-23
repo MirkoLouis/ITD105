@@ -1,8 +1,9 @@
 import { BzChart } from 'https://cdn.jsdelivr.net/gh/bonezegei/bzUI/dist/bzChart.min.js';
 import { TinyLSTM } from './tiny-lstm.js';
 import { createUnrollGraph } from './unroll-graph.js';
-import { createBot } from './trading-bot.js';
+import { createBot, DEFAULT_CONFIG, parseBotConfig } from './trading-bot.js';
 import { createBotPanel } from './bot-ui.js';
+import { saveBotState, loadBotState } from './storage.js';
 
 const SYMBOL = 'BTCUSDT';
 const HORIZON = 20;         // candles to forecast
@@ -112,6 +113,17 @@ function trainAndForecast(closes, latestTime) {
 
 const fmtTime = (ms) => new Date(ms).toISOString().slice(11, 19);
 
+// Text markers for the bot's trades, placed at the candle each trade was decided on.
+function tradeAnnotations() {
+  const markers = [];
+  for (const trade of bot.state.trades) {
+    const index = candles.findIndex((c) => c.time + INTERVAL_MS[INTERVAL] === trade.time);
+    if (index === -1) continue;
+    markers.push({ type: 'text', x: index, y: trade.price, text: trade.side === 'BUY' ? '▲ BUY' : '▼ SELL' });
+  }
+  return markers;
+}
+
 function buildOptions(type) {
   const n = candles.length;
   const labels = [
@@ -131,6 +143,7 @@ function buildOptions(type) {
     { type: 'trendline', x1: n - 1, y1: min, x2: n - 1, y2: max },
     { type: 'text', x: n - WINDOW, y: max, text: `window ${WINDOW} candles` },
     { type: 'text', x: n + HORIZON / 2, y: min, text: `forecast ${HORIZON} candles` },
+    ...tradeAnnotations(),
   ];
 
   if (type === 'candlestick') {
@@ -166,7 +179,7 @@ function updateAccuracy() {
   });
   if (!pts.length) {
     accuracyEl.textContent = 'Prediction check: waiting for the next candle to open…';
-    return;
+    return null;
   }
   const mapeOf = (key) => (pts.reduce((s, q) => s + Math.abs(q[key] - q.a) / q.a, 0) / pts.length) * 100;
   const mape = mapeOf('p');
@@ -177,6 +190,7 @@ function updateAccuracy() {
     `Prediction check: ${pts.length} predicted candles · LSTM MAPE ${mape.toFixed(3)}% · ` +
     `repeat-last-close MAPE ${baseMape.toFixed(3)}% · ` +
     `latest predicted ${last.p.toFixed(2)} vs actual ${last.a.toFixed(2)} (${lastErr.toFixed(3)}% error).`;
+  return { mape, baseMape };
 }
 
 function updateText() {
@@ -294,8 +308,39 @@ function updateGraph() {
 
 buildGraph();
 
-const bot = createBot();
-const panel = createBotPanel({ bot, root: document.getElementById('bot-panel') });
+// Restores the saved bot run (stopped) and its config, or starts fresh when nothing valid is stored.
+const savedState = loadBotState();
+const bot = createBot({ config: parseBotConfig(savedState?.config ?? {}, DEFAULT_CONFIG), state: savedState });
+const persistBot = () => saveBotState({ ...bot.state, config: bot.config });
+const equityChart = new BzChart(document.getElementById('c-equity'), {
+  type: 'line',
+  labels: [],
+  datasets: [
+    { label: 'Bot equity', data: [], points: false },
+    { label: 'Buy & hold', data: [], points: false },
+  ],
+  height: 220,
+});
+const panel = createBotPanel({ bot, root: document.getElementById('bot-panel'), persist: persistBot, equityChart });
+
+// Runs the bot for the newest closed candle; an exception is shown in the bot panel and never stops the page rendering.
+function runBot(last, accuracy) {
+  try {
+    bot.onClosedCandle({
+      time: last.time,
+      closeTime: last.time + INTERVAL_MS[INTERVAL],
+      lastClose: last.c,
+      forecastNext: forecast[0],
+      mape: accuracy?.mape,
+      baseMape: accuracy?.baseMape,
+    });
+    persistBot();
+    panel.render(last.c);
+    panel.showError(null);
+  } catch (err) {
+    panel.showError(err.message);
+  }
+}
 
 // ---- Live loop ----
 function render() {
@@ -322,11 +367,10 @@ async function tick() {
     forecast = trainAndForecast(closes, candles[candles.length - 1].time);
     predictions.set(candles[candles.length - 1].time + INTERVAL_MS[INTERVAL], forecast[0]);
     const last = candles[candles.length - 1];
-    bot.onClosedCandle({ time: last.time, closeTime: last.time + INTERVAL_MS[INTERVAL], lastClose: last.c, forecastNext: forecast[0] });
-    panel.render(last.c);
+    const accuracy = updateAccuracy();
+    runBot(last, accuracy);
     render();
     updateText();
-    updateAccuracy();
     updateGraph();
     updateUnroll();
     statusEl.textContent = `Live · updated ${new Date().toLocaleTimeString()} · ${candles.length} × ${INTERVAL} candles`;

@@ -123,17 +123,25 @@
         <label class="bz-flex bz-items-center bz-gap-2"><span>Threshold (%)</span><input id="bot-threshold" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
         <label class="bz-flex bz-items-center bz-gap-2"><span>Buy size (% of USDT)</span><input id="bot-buy-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
         <label class="bz-flex bz-items-center bz-gap-2"><span>Sell size (% of BTC)</span><input id="bot-sell-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Fee (%)</span><input id="bot-fee" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Stop-loss (%, 0 = off)</span><input id="bot-stop-loss" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Take-profit (%, 0 = off)</span><input id="bot-take-profit" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><input id="bot-mape-gate" type="checkbox"><span>MAPE gate (hold while LSTM MAPE &ge; baseline)</span></label>
+        <button type="button" id="bot-export-csv" class="bz-btn bz-btn-outline">Export CSV</button>
       </div>
       <div class="btc-info">
         <p>Initial balance: <strong><span id="bot-initial">10,000.00</span> USDT</strong></p>
         <p>USDT: <strong id="bot-usdt">10,000.00</strong> · BTC: <strong id="bot-btc">0.000000</strong> · Position: <strong id="bot-position">CASH</strong></p>
         <p>Equity: <strong id="bot-equity">10,000.00</strong> USDT · PnL: <strong id="bot-pnl">0.00 (0.0000%)</strong></p>
+        <p>Buy &amp; hold: <strong id="bot-benchmark">-</strong></p>
         <p>Last signal: <strong id="bot-signal">-</strong></p>
+        <p id="bot-error" role="alert" class="bz-text-muted bz-m-0" hidden></p>
       </div>
+      <div class="bz-chart"><canvas id="c-equity" aria-label="Equity curve of the bot versus buy and hold"></canvas></div>
       <div class="btc-net-wrap">
         <table class="bz-table">
           <thead>
-            <tr><th>Time</th><th>Side</th><th>Price</th><th>Qty (BTC)</th><th>Forecast Δ%</th><th>USDT after</th><th>BTC after</th><th>Equity after</th></tr>
+            <tr><th>Time</th><th>Side</th><th>Reason</th><th>Price</th><th>Qty (BTC)</th><th>Fee (USDT)</th><th>Forecast Δ%</th><th>USDT after</th><th>BTC after</th><th>Equity after</th></tr>
           </thead>
           <tbody id="trade-rows"></tbody>
         </table>

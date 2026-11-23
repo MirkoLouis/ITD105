@@ -41,6 +41,8 @@ export function executeBuy(wallet, spendUsdt, price, feeRate = 0) {
 export function executeSell(wallet, sellBtc, price, feeRate = 0) {
     assertPositive(sellBtc, 'sellBtc');
     assertPositive(price, 'price');
+    // Nothing to sell without a BTC holding.
+    if (wallet.btc <= 0) throw new RangeError('no BTC to sell');
     const qty = sellBtc >= wallet.btc ? wallet.btc : round8(sellBtc);
     const notional = round8(qty * price);
     const fee = round8(notional * feeRate);

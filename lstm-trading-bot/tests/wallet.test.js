@@ -5,6 +5,10 @@ import { createWallet, executeBuy, executeSell, equity, pnl, positionOf } from '
 // Compares floats within a small tolerance.
 const closeTo = (actual, expected, eps = 1e-6) => assert.ok(Math.abs(actual - expected) < eps, `${actual} !~ ${expected}`);
 
+test('selling from a wallet without BTC throws RangeError', () => {
+    assert.throws(() => executeSell(createWallet(), 1, 50000), RangeError);
+});
+
 test('createWallet starts with 10000 USDT, 0 BTC, in CASH', () => {
     const wallet = createWallet();
     assert.equal(wallet.usdt, 10000);
