@@ -13,6 +13,7 @@ export function createWallet(initialUsdt = 10000) {
 
 // Validates that a number is finite and positive, else throws RangeError.
 function assertPositive(value, name) {
+    // Reject NaN, Infinity, zero and negatives.
     if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive number`);
 }
 

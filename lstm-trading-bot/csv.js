@@ -2,9 +2,14 @@
 
 const COLUMNS = ['time', 'side', 'reason', 'price', 'qty', 'fee', 'changePct', 'usdtAfter', 'btcAfter', 'equityAfter'];
 
-// Quotes a cell when it contains a comma, quote or line break (RFC 4180).
-function csvCell(value) {
-    const text = String(value);
+// Quotes a cell when it contains a comma, quote or line break (RFC 4180) and neutralises spreadsheet formulas (CSV injection).
+export function csvCell(value) {
+    // Numbers (including negatives) are written as-is; only strings can carry a formula.
+    // Conditional: numeric value.
+    if (typeof value === 'number') return String(value);
+    let text = String(value);
+    // A leading = + - @ tab or CR would be evaluated as a formula, so prefix an apostrophe.
+    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
     return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

@@ -23,32 +23,42 @@ export function expectedChangePct(forecastPrice, lastClose) {
 
 // Chooses BUY, SELL or HOLD from the forecast change, holdings and minimum order size.
 export function decideSignal({ changePct, thresholdPct, wallet, price, buyFraction, sellFraction = 1 }) {
+    // BUY: forecast rises past the threshold and the order is not dust.
     if (changePct > thresholdPct && wallet.usdt * buyFraction >= MIN_ORDER_USDT) return 'BUY';
+    // SELL: forecast falls past the threshold and the sold amount is not dust.
     if (changePct < -thresholdPct && wallet.btc * sellFraction * price >= MIN_ORDER_USDT) return 'SELL';
     return 'HOLD';
 }
 
 // Returns 'STOP_LOSS' or 'TAKE_PROFIT' when the price moved far enough from the average entry, else null (0 = off).
 export function checkRiskExit({ wallet, price, stopLossPct, takeProfitPct }) {
+    // No position, nothing to protect.
     if (wallet.btc <= 0 || wallet.avgEntry <= 0) return null;
     const movePct = (price / wallet.avgEntry - 1) * 100;
+    // Price fell far enough below the entry.
     if (stopLossPct > 0 && movePct <= -stopLossPct) return 'STOP_LOSS';
+    // Price rose far enough above the entry.
     if (takeProfitPct > 0 && movePct >= takeProfitPct) return 'TAKE_PROFIT';
     return null;
 }
 
 // Value of the buy-and-hold benchmark at `price`; null before the benchmark exists.
 export function benchmarkEquity(state, price) {
+    // No benchmark has been anchored yet.
     if (!state.benchmark) return null;
     return state.benchmark.btc * price;
 }
 
 // Parses a raw field; returns the number when it is a finite value inside the bounds, else null.
 function parseField(raw, { min, max, minExclusive }) {
+    // Empty input is rejected.
     if (raw === undefined || raw === null || String(raw).trim() === '') return null;
     const value = Number(raw);
+    // NaN and Infinity are rejected.
     if (!Number.isFinite(value)) return null;
+    // Below the lower bound (exclusive or inclusive).
     if (minExclusive ? value <= min : value < min) return null;
+    // Above the upper bound.
     if (value > max) return null;
     return value;
 }
@@ -100,6 +110,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
 
     // Records what a buy-and-hold investor would own: all initial USDT, minus the fee, at `price`.
     const ensureBenchmark = (price) => {
+        // Keep an existing benchmark; ignore unusable prices.
         if (bot.state.benchmark || !Number.isFinite(price) || price <= 0) return;
         const spend = bot.state.wallet.initialUsdt * (1 - percentToFraction(bot.config.feePct));
         bot.state.benchmark = { startPrice: price, btc: spend / price };
@@ -152,12 +163,15 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
     const recordEquity = (time, price) => {
         const { equityHistory } = bot.state;
         equityHistory.push({ time, equity: equity(bot.state.wallet, price), benchmark: benchmarkEquity(bot.state, price) });
+        // Drop the oldest points beyond the cap.
         if (equityHistory.length > MAX_EQUITY_POINTS) equityHistory.splice(0, equityHistory.length - MAX_EQUITY_POINTS);
     };
 
     // True when the gate is on and the LSTM does not beat the repeat-last-close baseline (or has no accuracy data yet).
     const gateBlocks = (mape, baseMape) => {
+        // Gate switched off: never blocks.
         if (!bot.config.mapeGate) return false;
+        // No accuracy data yet: block conservatively.
         if (!Number.isFinite(mape) || !Number.isFinite(baseMape)) return true;
         return mape >= baseMape;
     };
@@ -166,6 +180,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
     const decide = ({ lastClose, changePct, mape, baseMape }) => {
         const { wallet: current } = bot.state;
         const riskReason = checkRiskExit({ wallet: current, price: lastClose, stopLossPct: bot.config.stopLossPct, takeProfitPct: bot.config.takeProfitPct });
+        // A risk exit overrides the LSTM signal.
         if (riskReason) return { signal: 'SELL', reason: riskReason, sellFraction: 1 };
         const sellFraction = percentToFraction(bot.config.sellPct);
         const signal = decideSignal({
@@ -176,13 +191,16 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
             buyFraction: percentToFraction(bot.config.buyPct),
             sellFraction,
         });
+        // The MAPE gate turns a trade into HOLD.
         if (signal !== 'HOLD' && gateBlocks(mape, baseMape)) return { signal: 'HOLD', reason: 'MAPE_GATE', sellFraction };
         return { signal, reason: 'SIGNAL', sellFraction };
     };
 
     // Evaluates one closed candle at most once; returns null when stopped or already seen.
     bot.onClosedCandle = ({ time, closeTime, lastClose, forecastNext, mape, baseMape }) => {
+        // Stopped bots do nothing.
         if (!bot.state.running) return null;
+        // Each candle is evaluated once.
         if (time === bot.state.lastEvaluatedTime) return null;
         bot.state.lastEvaluatedTime = time;
         ensureBenchmark(lastClose);
@@ -194,6 +212,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
         const trade = signal === 'HOLD'
             ? null
             : placeOrder({ side: signal, reason, sellFraction, time, closeTime, lastClose, changePct });
+        // Only real orders enter the history.
         if (trade) bot.state.trades.push(trade);
         recordEquity(closeTime ?? time, lastClose);
         return { signal, reason, trade };

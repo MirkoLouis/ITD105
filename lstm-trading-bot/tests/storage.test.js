@@ -44,6 +44,37 @@ test('round trip keeps trades and wallet and restores running as false', () => {
     assert.equal(loaded.config.feePct, 0.1);
 });
 
+// Saves a valid state after letting `mutate` tamper with it, then loads it back.
+const loadTampered = (mutate) => {
+    const bot = createBot();
+    bot.start(100);
+    bot.onClosedCandle({ time: 1, closeTime: 2, lastClose: 100, forecastNext: 101 });
+    const state = JSON.parse(JSON.stringify(bot.state));
+    mutate(state);
+    const storage = memoryStorage();
+    saveBotState(state, storage);
+    return loadBotState(storage);
+};
+
+test('a tampered trade reason loads as null', () => {
+    assert.equal(loadTampered((state) => { state.trades[0].reason = '<img onerror=x>'; }), null);
+    assert.notEqual(loadTampered((state) => { state.trades[0].reason = 'STOP_LOSS'; }), null);
+});
+
+test('negative balances or non-positive initialUsdt load as null', () => {
+    assert.equal(loadTampered((state) => { state.wallet.usdt = -1; }), null);
+    assert.equal(loadTampered((state) => { state.wallet.btc = -0.5; }), null);
+    assert.equal(loadTampered((state) => { state.wallet.feesPaid = -1; }), null);
+    assert.equal(loadTampered((state) => { state.wallet.initialUsdt = 0; }), null);
+});
+
+test('equity history entries with a bad benchmark are dropped', () => {
+    const loaded = loadTampered((state) => {
+        state.equityHistory.push({ time: 5, equity: 1, benchmark: 'x' }, { time: 6, equity: 1, benchmark: null });
+    });
+    assert.deepEqual(loaded.equityHistory.map((point) => point.time), [2, 6]);
+});
+
 test('saveBotState swallows storage errors', () => {
     const failing = { setItem: () => { throw new Error('quota'); } };
     assert.equal(saveBotState(createBot().state, failing), false);

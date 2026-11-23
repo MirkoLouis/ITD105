@@ -116,8 +116,10 @@ const fmtTime = (ms) => new Date(ms).toISOString().slice(11, 19);
 // Text markers for the bot's trades, placed at the candle each trade was decided on.
 function tradeAnnotations() {
   const markers = [];
+  // One marker per trade that falls inside the visible candles.
   for (const trade of bot.state.trades) {
     const index = candles.findIndex((c) => c.time + INTERVAL_MS[INTERVAL] === trade.time);
+    // The trade's candle is not visible (scrolled out or another timeframe).
     if (index === -1) continue;
     markers.push({ type: 'text', x: index, y: trade.price, text: trade.side === 'BUY' ? '▲ BUY' : '▼ SELL' });
   }
@@ -316,7 +318,7 @@ const equityChart = new BzChart(document.getElementById('c-equity'), {
   type: 'line',
   labels: [],
   datasets: [
-    { label: 'Bot equity', data: [], points: false },
+    { label: 'Bot', data: [], points: false },
     { label: 'Buy & hold', data: [], points: false },
   ],
   height: 220,
@@ -326,7 +328,7 @@ const panel = createBotPanel({ bot, root: document.getElementById('bot-panel'), 
 // Runs the bot for the newest closed candle; an exception is shown in the bot panel and never stops the page rendering.
 function runBot(last, accuracy) {
   try {
-    bot.onClosedCandle({
+    const result = bot.onClosedCandle({
       time: last.time,
       closeTime: last.time + INTERVAL_MS[INTERVAL],
       lastClose: last.c,
@@ -334,7 +336,8 @@ function runBot(last, accuracy) {
       mape: accuracy?.mape,
       baseMape: accuracy?.baseMape,
     });
-    persistBot();
+    // Save only when a candle was actually evaluated (not every 1 s tick).
+    if (result) persistBot();
     panel.render(last.c);
     panel.showError(null);
   } catch (err) {

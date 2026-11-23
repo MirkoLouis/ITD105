@@ -1,6 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tradesToCsv } from '../csv.js';
+import { tradesToCsv, csvCell } from '../csv.js';
+
+test('csvCell quotes commas, quotes and newlines', () => {
+    assert.equal(csvCell('a,b'), '"a,b"');
+    assert.equal(csvCell('say "hi"'), '"say ""hi"""');
+    assert.equal(csvCell('a\nb'), '"a\nb"');
+    assert.equal(csvCell('plain'), 'plain');
+});
+
+test('csvCell neutralises formula prefixes in strings but not numbers', () => {
+    for (const lead of ['=', '+', '-', '@', '\t', '\r']) assert.equal(csvCell(`${lead}1`).replace(/^"|"$/g, '')[0], "'");
+    assert.equal(csvCell('=1+1'), "'=1+1");
+    assert.equal(csvCell(-5.5), '-5.5');
+    assert.equal(csvCell(0.02), '0.02');
+});
 
 const HEADER = 'time,side,reason,price,qty,fee,changePct,usdtAfter,btcAfter,equityAfter';
 

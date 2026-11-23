@@ -67,6 +67,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
 
     // Writes the active config back into the inputs (shows the kept value after a rejection).
     const showConfig = () => {
+        // One input per numeric config field.
         for (const [key, input] of Object.entries(inputs)) input.value = String(bot.config[key]);
         gateInput.checked = bot.config.mapeGate;
     };
@@ -89,18 +90,22 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
 
     // Redraws the equity chart only when a new point was added.
     const renderEquityChart = () => {
+        // The chart is optional (absent in non-browser use).
         if (!equityChart) return;
         const history = bot.state.equityHistory;
         const last = history[history.length - 1];
         const key = `${history.length}:${last ? last.time : ''}`;
+        // Nothing new since the last draw.
         if (key === chartKey) return;
         chartKey = key;
+        // Plot the change from the initial balance so the axis shows distinct values.
+        const initial = bot.state.wallet.initialUsdt;
         equityChart.setData({
             type: 'line',
             labels: history.map((point) => formatClock(point.time)),
             datasets: [
-                { label: 'Bot equity', data: history.map((point) => point.equity), points: false },
-                { label: 'Buy & hold', data: history.map((point) => point.benchmark), points: false },
+                { label: 'Bot', data: history.map((point) => point.equity - initial), points: false },
+                { label: 'Buy & hold', data: history.map((point) => (point.benchmark === null ? null : point.benchmark - initial)), points: false },
             ],
         });
     };
@@ -113,6 +118,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
         byId('bot-pnl').textContent = formatPnl(profit.abs, profit.pct);
         byId('bot-position').textContent = positionOf(wallet, price);
         const held = benchmarkEquity(bot.state, price);
+        // No benchmark yet: leave the readout as it is.
         if (held === null) return;
         const heldAbs = held - wallet.initialUsdt;
         byId('bot-benchmark').textContent = `${formatUsdt(held)} USDT · ${formatPnl(heldAbs, (heldAbs / wallet.initialUsdt) * 100)}`;
@@ -120,6 +126,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
 
     // Renders balances, status, signal, trade table and chart; lastClose is the current mark price.
     const render = (lastClose) => {
+        // Remember the newest mark price when one is given.
         if (Number.isFinite(lastClose)) lastPrice = lastClose;
         const { state } = bot;
         const { wallet } = state;
@@ -131,7 +138,9 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
         byId('bot-signal').textContent = state.lastSignal === null
             ? '-'
             : `${state.lastSignal} (${formatPct(state.lastChangePct)}%)${reasonNote}`;
+        // Without a benchmark the readout shows a dash.
         if (state.benchmark === null) byId('bot-benchmark').textContent = '-';
+        // Price-dependent readouts need a mark price.
         if (lastPrice !== null) renderPriced(lastPrice);
         renderTrades(state.trades);
         renderEquityChart();

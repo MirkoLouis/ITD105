@@ -2,6 +2,7 @@
 
 export const STORAGE_KEY = 'lstm-bot-state-v1';
 const WALLET_FIELDS = ['initialUsdt', 'usdt', 'btc', 'avgEntry', 'feesPaid'];
+const TRADE_REASONS = ['SIGNAL', 'STOP_LOSS', 'TAKE_PROFIT'];
 const TRADE_NUMBER_FIELDS = ['time', 'price', 'qty', 'changePct', 'usdtAfter', 'btcAfter', 'equityAfter'];
 
 // True for finite numbers only (rejects strings, NaN, Infinity, null).
@@ -10,27 +11,45 @@ const isFiniteNumber = (value) => typeof value === 'number' && Number.isFinite(v
 // True when `value` is a non-null object that is not an array.
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-// Validates the wallet fields.
-const isValidWallet = (wallet) => isPlainObject(wallet) && WALLET_FIELDS.every((field) => isFiniteNumber(wallet[field]));
+// Validates the wallet: all fields finite, initialUsdt positive, balances non-negative.
+function isValidWallet(wallet) {
+    // Reject non-objects.
+    if (!isPlainObject(wallet)) return false;
+    // Reject missing or non-finite fields.
+    if (!WALLET_FIELDS.every((field) => isFiniteNumber(wallet[field]))) return false;
+    return wallet.initialUsdt > 0 && wallet.usdt >= 0 && wallet.btc >= 0 && wallet.avgEntry >= 0 && wallet.feesPaid >= 0;
+}
 
-// Validates one trade record and fills the fields older saves may lack.
+// Validates one trade record; a missing reason becomes SIGNAL, an unknown reason rejects the record.
 function normalizeTrade(trade) {
+    // Reject non-objects.
     if (!isPlainObject(trade)) return null;
+    // Every numeric field must be a finite number.
     if (!TRADE_NUMBER_FIELDS.every((field) => isFiniteNumber(trade[field]))) return null;
+    // Reject an unknown side.
     if (trade.side !== 'BUY' && trade.side !== 'SELL') return null;
-    return { ...trade, fee: isFiniteNumber(trade.fee) ? trade.fee : 0, reason: typeof trade.reason === 'string' ? trade.reason : 'SIGNAL' };
+    // Reason is whitelisted because it is rendered and exported.
+    const reason = trade.reason ?? 'SIGNAL';
+    // Reject a reason outside the whitelist.
+    if (!TRADE_REASONS.includes(reason)) return null;
+    return { ...trade, fee: isFiniteNumber(trade.fee) ? trade.fee : 0, reason };
 }
 
 // Validates the benchmark; absent or malformed becomes null.
 const normalizeBenchmark = (benchmark) =>
     (isPlainObject(benchmark) && isFiniteNumber(benchmark.startPrice) && isFiniteNumber(benchmark.btc) ? benchmark : null);
 
+// True for a well-formed equity point: finite time and equity, benchmark finite or null.
+const isValidPoint = (point) =>
+    isPlainObject(point) && isFiniteNumber(point.time) && isFiniteNumber(point.equity)
+    && (point.benchmark === null || isFiniteNumber(point.benchmark));
+
 // Keeps only well-formed equity points, capped to the newest 1000.
-const normalizeHistory = (history) => {
+function normalizeHistory(history) {
+    // A missing or malformed history becomes empty.
     if (!Array.isArray(history)) return [];
-    const valid = history.filter((point) => isPlainObject(point) && isFiniteNumber(point.time) && isFiniteNumber(point.equity));
-    return valid.slice(-1000);
-};
+    return history.filter(isValidPoint).slice(-1000);
+}
 
 // Saves the state as JSON; returns false when storage is unavailable or full.
 export function saveBotState(state, storage = globalThis.localStorage) {
@@ -50,8 +69,10 @@ export function loadBotState(storage = globalThis.localStorage) {
     } catch {
         return null;
     }
+    // Missing or malformed top-level fields mean a fresh wallet.
     if (!isPlainObject(parsed) || !isValidWallet(parsed.wallet) || !Array.isArray(parsed.trades)) return null;
     const trades = parsed.trades.map(normalizeTrade);
+    // Any invalid trade invalidates the whole save.
     if (trades.some((trade) => trade === null)) return null;
     return {
         running: false,
