@@ -322,6 +322,7 @@ async function tick() {
     updateGraph();
     updateUnroll();
     statusEl.textContent = `Live · updated ${new Date().toLocaleTimeString()} · ${candles.length} × ${INTERVAL} candles`;
+    liveEl.dataset.state = 'on'; // successful tick: clear any earlier error state
   } catch (err) {
     liveEl.dataset.state = 'error';
     statusEl.textContent = `Error: ${err.message}`;
