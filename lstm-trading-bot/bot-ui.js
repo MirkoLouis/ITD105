@@ -131,6 +131,9 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
         const { state } = bot;
         const { wallet } = state;
         byId('bot-status').textContent = state.running ? 'Running' : 'Stopped';
+        // Only the action that makes sense for the current state is clickable (prevents a double Start).
+        byId('bot-start').disabled = state.running;
+        byId('bot-stop').disabled = !state.running;
         byId('bot-initial').textContent = formatUsdt(wallet.initialUsdt);
         byId('bot-usdt').textContent = formatUsdt(wallet.usdt);
         byId('bot-btc').textContent = formatBtc(wallet.btc);
@@ -150,6 +153,8 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
     const renderTrades = (trades) => {
         const body = byId('trade-rows');
         body.replaceChildren(...[...trades].reverse().map(buildTradeRow));
+        // The empty-state message shows only while there are no trades.
+        byId('trade-empty').hidden = trades.length > 0;
     };
 
     // Runs a control action, then redraws and saves.

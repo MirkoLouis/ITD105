@@ -96,7 +96,8 @@ export function createUnrollGraph({ canvas, stage, tip }) {
       minY = Math.min(minY, n.y - n.r - 40);
       maxY = Math.max(maxY, n.y + n.r + 40);
     }
-    const s = clamp(Math.min(width / (maxX - minX + 40), height / (maxY - minY + 40)), MIN_SCALE, 1);
+    // Horizontal margin of 120 leaves room for the node labels, which are wider than the circles.
+    const s = clamp(Math.min(width / (maxX - minX + 120), height / (maxY - minY + 40)), MIN_SCALE, 1);
     view.scale = s;
     view.panX = -((minX + maxX) / 2) * s;
     view.panY = -((minY + maxY) / 2) * s;
@@ -114,8 +115,10 @@ export function createUnrollGraph({ canvas, stage, tip }) {
     const list = [];
     const edges = [];
     let prevCell = null;
+    // Seed the chain centred on the origin so gravity (toward x = 0) does not drag it sideways.
+    const offset = (cache.length * SPACING) / 2;
     cache.forEach((s, t) => {
-      const x = t * SPACING;
+      const x = t * SPACING - offset;
       const input = put(`x${t}`, {
         kind: 'input', r: 14, label: `x${t + 1}`, sub: `z=${f2(s.x)}`,
         info: [`Input, step ${t + 1}`, `z = ${f2(s.x)}`, `close = ${closes[t].toFixed(2)} USDT`],
@@ -141,7 +144,7 @@ export function createUnrollGraph({ canvas, stage, tip }) {
     const out = put('y', {
       kind: 'out', r: 26, label: 'forecast ŷ', sub: f2(yNorm),
       info: ['Forecast ŷ (normalized)', `ŷ = ${f2(yNorm)}`],
-    }, cache.length * SPACING, 0);
+    }, cache.length * SPACING - offset, 0);
     list.push(out);
     if (prevCell) edges.push({ a: prevCell, b: out, kind: 'state' });
 
@@ -284,7 +287,10 @@ export function createUnrollGraph({ canvas, stage, tip }) {
   }
 
   function frame() {
-    if (alpha > ALPHA_MIN || dragNode) simulate();
+    const simulating = alpha > ALPHA_MIN || dragNode;
+    if (simulating) simulate();
+    // Follow the contracting chain while the layout settles, unless the user set the view.
+    if (simulating && !dragNode && !userView) fit();
     draw();
     requestAnimationFrame(frame);
   }
