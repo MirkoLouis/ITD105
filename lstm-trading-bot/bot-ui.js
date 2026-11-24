@@ -1,6 +1,6 @@
 // Bot panel: wires the bzUI controls to the bot and renders wallet, signal, benchmark, equity chart and trade history.
 import { equity, pnl, positionOf } from './wallet.js';
-import { ADAPTIVE_MIN_SAMPLES, ADAPTIVE_WINDOW, benchmarkEquity, parseBotConfig } from './trading-bot.js';
+import { ADAPTIVE_MIN_SAMPLES, benchmarkEquity, parseBotConfig } from './trading-bot.js';
 import { tradesToCsv } from './csv.js';
 
 // Formats USDT with 2 decimals and thousands separators.
@@ -14,18 +14,17 @@ const formatClock = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hourCycle
 // Formats an absolute amount and percentage as "+12.34 (+0.1234%)".
 const formatPnl = (abs, pct) => `${abs >= 0 ? '+' : ''}${formatUsdt(abs)} (${formatPct(pct)}%)`;
 
-// Describes the threshold in effect, e.g. "Threshold: 0.0046% (adaptive, p95 of last 60)".
+// Describes the threshold in effect, e.g. "Threshold: 0.0042% (adaptive, target 3 trades/min)".
 function describeThreshold(state, config) {
-    const { lastThreshold, recentAbsChanges } = state;
+    const { lastThreshold, warmupAbsChanges } = state;
     // Fixed mode shows the configured value even before the first candle.
     if (config.thresholdMode === 'fixed') return `Threshold: ${config.thresholdPct}% (fixed)`;
     // Adaptive mode has nothing to report before a candle was evaluated.
-    if (lastThreshold === null || lastThreshold.source === 'fixed') return `Threshold: waiting for candles (adaptive, target ${config.targetSignalsPerMin}/min)`;
+    if (lastThreshold === null || lastThreshold.source === 'fixed') return `Threshold: waiting for candles (adaptive, target ${config.targetTradesPerMin} trades/min)`;
     const pct = `${lastThreshold.pct.toFixed(4)}%`;
     // Warm-up: the fixed value is still in use.
-    if (lastThreshold.source === 'warmup') return `Threshold: ${pct} (warming up ${recentAbsChanges.length}/${ADAPTIVE_MIN_SAMPLES}, using fixed)`;
-    const samples = Math.min(recentAbsChanges.length, ADAPTIVE_WINDOW);
-    return `Threshold: ${pct} (adaptive, p${Math.round(lastThreshold.quantile * 100)} of last ${samples})`;
+    if (lastThreshold.source === 'warmup') return `Threshold: ${pct} (warming up ${warmupAbsChanges.length}/${ADAPTIVE_MIN_SAMPLES}, using fixed)`;
+    return `Threshold: ${pct} (adaptive, target ${config.targetTradesPerMin} trades/min)`;
 }
 
 // Builds one trade-history row using textContent only (no HTML injection).
@@ -69,7 +68,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
     const byId = (id) => root.querySelector(`#${id}`);
     const inputs = {
         thresholdMode: byId('bot-threshold-mode'),
-        targetSignalsPerMin: byId('bot-target-rate'),
+        targetTradesPerMin: byId('bot-target-rate'),
         thresholdPct: byId('bot-threshold'),
         buyPct: byId('bot-buy-pct'),
         sellPct: byId('bot-sell-pct'),

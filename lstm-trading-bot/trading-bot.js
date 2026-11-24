@@ -3,12 +3,14 @@ import { createWallet, equity, executeBuy, executeSell } from './wallet.js';
 
 export const MIN_ORDER_USDT = 10;
 export const MAX_EQUITY_POINTS = 1000;
-export const ADAPTIVE_WINDOW = 60;
 export const ADAPTIVE_MIN_SAMPLES = 20;
+export const ADAPTIVE_ETA = 0.3;
+export const THETA_MIN_PCT = 0.00001;
+export const THETA_MAX_PCT = 1;
 const THRESHOLD_MODES = ['adaptive', 'fixed'];
 export const DEFAULT_CONFIG = {
     thresholdMode: 'adaptive',
-    targetSignalsPerMin: 3,
+    targetTradesPerMin: 3,
     thresholdPct: 0.01,
     buyPct: 50,
     sellPct: 100,
@@ -26,21 +28,21 @@ export function expectedChangePct(forecastPrice, lastClose) {
     return (forecastPrice / lastClose - 1) * 100;
 }
 
-// Quantile of |changePct| that yields about `targetSignalsPerMin` signals per minute (<= 0 means every candle may signal).
-export function adaptiveQuantile(targetSignalsPerMin, candlesPerMinute) {
-    return 1 - targetSignalsPerMin / candlesPerMinute;
+// Starting threshold after warm-up: the 90th percentile of the collected |changePct| values, or the fallback when that is 0.
+export function initialAdaptiveThreshold(warmupAbsChanges, fallbackPct) {
+    const sorted = [...warmupAbsChanges].sort((a, b) => a - b);
+    const index = Math.min(Math.floor(0.9 * sorted.length), sorted.length - 1);
+    const percentile = sorted[index];
+    // An all-zero warm-up gives no usable scale.
+    return percentile > 0 ? percentile : fallbackPct;
 }
 
-// Percentile threshold of recent |changePct| values; null while fewer than ADAPTIVE_MIN_SAMPLES exist (warm-up).
-export function adaptiveThresholdPct(recentAbsChanges, targetSignalsPerMin, candlesPerMinute) {
-    const quantile = adaptiveQuantile(targetSignalsPerMin, candlesPerMinute);
-    // Target at or above the candle rate: every candle may signal.
-    if (quantile <= 0) return 0;
-    // Not enough history yet.
-    if (recentAbsChanges.length < ADAPTIVE_MIN_SAMPLES) return null;
-    const sorted = [...recentAbsChanges].sort((a, b) => a - b);
-    const index = Math.min(Math.floor(quantile * sorted.length), sorted.length - 1);
-    return sorted[index];
+// Feedback controller step: multiplicative update that raises theta after a trade and lowers it otherwise, clamped.
+export function nextAdaptiveThreshold(thetaPct, traded, targetTradesPerMin, candlesPerMinute) {
+    // Target trade probability per candle (at most 1 when the target exceeds the candle rate).
+    const targetProbability = Math.min(1, targetTradesPerMin / candlesPerMinute);
+    const next = thetaPct * Math.exp(ADAPTIVE_ETA * ((traded ? 1 : 0) - targetProbability));
+    return Math.min(THETA_MAX_PCT, Math.max(THETA_MIN_PCT, next));
 }
 
 // Chooses BUY, SELL or HOLD from the forecast change, holdings and minimum order size.
@@ -109,8 +111,11 @@ export function parseBotConfig(raw, previous = DEFAULT_CONFIG) {
     // Unknown modes keep the previous mode (or the default for configs saved before the mode existed).
     const previousMode = previous.thresholdMode ?? DEFAULT_CONFIG.thresholdMode;
     config.thresholdMode = THRESHOLD_MODES.includes(raw.thresholdMode) ? raw.thresholdMode : previousMode;
-    const previousTarget = previous.targetSignalsPerMin ?? DEFAULT_CONFIG.targetSignalsPerMin;
-    config.targetSignalsPerMin = parseField(raw.targetSignalsPerMin, TARGET_RATE_BOUNDS) ?? previousTarget;
+    // Configs saved by the percentile version call the field targetSignalsPerMin; accept it when the new name is absent.
+    const previousTarget = previous.targetTradesPerMin ?? previous.targetSignalsPerMin ?? DEFAULT_CONFIG.targetTradesPerMin;
+    const rawTarget = raw.targetTradesPerMin === undefined ? raw.targetSignalsPerMin : raw.targetTradesPerMin;
+    config.targetTradesPerMin = parseField(rawTarget, TARGET_RATE_BOUNDS) ?? previousTarget;
+    delete config.targetSignalsPerMin;
     return config;
 }
 
@@ -126,7 +131,8 @@ function freshState(wallet) {
         lastReason: null,
         benchmark: null,
         equityHistory: [],
-        recentAbsChanges: [],
+        adaptiveThetaPct: null,
+        warmupAbsChanges: [],
         lastIntervalMs: null,
         lastThreshold: null,
     };
@@ -209,24 +215,36 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
         return mape >= baseMape;
     };
 
-    // Chooses this candle's threshold; adaptive mode reads the window before the candle's own change is added to it.
+    // Chooses this candle's threshold: fixed, warm-up (fixed while collecting samples) or the controller's theta.
     const resolveThreshold = (changePct, intervalMs) => {
-        const fixed = { pct: bot.config.thresholdPct, source: 'fixed', quantile: null };
-        // Without an interval (or in fixed mode) the fixed threshold applies and the window is left alone.
+        const fixed = { pct: bot.config.thresholdPct, source: 'fixed' };
+        // Without an interval (or in fixed mode) the fixed threshold applies and the controller state is left alone.
         if (!Number.isFinite(intervalMs) || bot.config.thresholdMode !== 'adaptive') return fixed;
-        // A new interval makes old samples incomparable.
-        if (intervalMs !== bot.state.lastIntervalMs) bot.state.recentAbsChanges = [];
+        // A new interval makes the old theta and samples incomparable: back to warm-up.
+        if (intervalMs !== bot.state.lastIntervalMs) {
+            bot.state.warmupAbsChanges = [];
+            bot.state.adaptiveThetaPct = null;
+        }
         bot.state.lastIntervalMs = intervalMs;
-        const { recentAbsChanges } = bot.state;
-        const { targetSignalsPerMin } = bot.config;
+        // Theta already initialised: the controller owns the threshold.
+        if (bot.state.adaptiveThetaPct !== null) return { pct: bot.state.adaptiveThetaPct, source: 'adaptive' };
+        const { warmupAbsChanges } = bot.state;
+        // Warm-up: collect samples and keep using the fixed threshold.
+        if (warmupAbsChanges.length < ADAPTIVE_MIN_SAMPLES) {
+            warmupAbsChanges.push(Math.abs(changePct));
+            return { ...fixed, source: 'warmup' };
+        }
+        // Warm-up complete: start the controller from the p90 of the samples.
+        bot.state.adaptiveThetaPct = initialAdaptiveThreshold(warmupAbsChanges, bot.config.thresholdPct);
+        return { pct: bot.state.adaptiveThetaPct, source: 'adaptive' };
+    };
+
+    // Feeds the candle's outcome (trade or not) back into theta; only candles decided by theta count.
+    const updateController = (threshold, traded, intervalMs) => {
+        // Fixed and warm-up candles do not move theta.
+        if (threshold.source !== 'adaptive') return;
         const candlesPerMinute = 60000 / intervalMs;
-        const adaptivePct = adaptiveThresholdPct(recentAbsChanges, targetSignalsPerMin, candlesPerMinute);
-        // Keep the newest ADAPTIVE_WINDOW samples.
-        recentAbsChanges.push(Math.abs(changePct));
-        if (recentAbsChanges.length > ADAPTIVE_WINDOW) recentAbsChanges.shift();
-        // Warm-up: not enough samples, so the fixed threshold applies.
-        if (adaptivePct === null) return { ...fixed, source: 'warmup' };
-        return { pct: adaptivePct, source: 'adaptive', quantile: adaptiveQuantile(targetSignalsPerMin, candlesPerMinute) };
+        bot.state.adaptiveThetaPct = nextAdaptiveThreshold(bot.state.adaptiveThetaPct, traded, bot.config.targetTradesPerMin, candlesPerMinute);
     };
 
     // Picks the action for this candle: risk exit first, then the LSTM signal behind the optional MAPE gate.
@@ -269,6 +287,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
             : placeOrder({ side: signal, reason, sellFraction, time, closeTime, lastClose, changePct });
         // Only real orders enter the history.
         if (trade) bot.state.trades.push(trade);
+        updateController(threshold, trade !== null, intervalMs);
         recordEquity(closeTime ?? time, lastClose);
         return { signal, reason, trade };
     };

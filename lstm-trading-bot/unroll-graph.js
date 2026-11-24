@@ -96,8 +96,8 @@ export function createUnrollGraph({ canvas, stage, tip }) {
       minY = Math.min(minY, n.y - n.r - 40);
       maxY = Math.max(maxY, n.y + n.r + 40);
     }
-    // Horizontal margin of 120 leaves room for the node labels, which are wider than the circles.
-    const s = clamp(Math.min(width / (maxX - minX + 120), height / (maxY - minY + 40)), MIN_SCALE, 1);
+    // Horizontal margin of 120 leaves room for the node labels, which are wider than the circles; the vertical margin of 80 keeps the lowest label inside the frame.
+    const s = clamp(Math.min(width / (maxX - minX + 120), height / (maxY - minY + 80)), MIN_SCALE, 1);
     view.scale = s;
     view.panX = -((minX + maxX) / 2) * s;
     view.panY = -((minY + maxY) / 2) * s;

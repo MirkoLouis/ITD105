@@ -82,37 +82,47 @@ test('saveBotState swallows storage errors', () => {
 
 // ---- Adaptive threshold persistence ----
 
-test('round trip keeps recentAbsChanges and lastIntervalMs', () => {
+test('round trip keeps adaptiveThetaPct, warmupAbsChanges, lastIntervalMs and the config', () => {
     const bot = createBot();
     bot.start(100);
-    for (let time = 1; time <= 5; time++) {
-        bot.onClosedCandle({ time, closeTime: time + 1, lastClose: 100, forecastNext: 100 + 0.001 * time, intervalMs: 1000 });
+    // 25 candles: 20 warm-up samples, then the controller owns theta.
+    for (let time = 1; time <= 25; time++) {
+        bot.onClosedCandle({ time, closeTime: time + 1, lastClose: 100, forecastNext: 100 + 0.001 * (time % 3), intervalMs: 1000 });
     }
+    assert.ok(bot.state.adaptiveThetaPct > 0);
     const storage = memoryStorage();
     saveBotState({ ...bot.state, config: bot.config }, storage);
     const loaded = loadBotState(storage);
-    assert.equal(loaded.recentAbsChanges.length, 5);
-    assert.deepEqual(loaded.recentAbsChanges, bot.state.recentAbsChanges);
+    assert.equal(loaded.adaptiveThetaPct, bot.state.adaptiveThetaPct);
+    assert.deepEqual(loaded.warmupAbsChanges, bot.state.warmupAbsChanges);
     assert.equal(loaded.lastIntervalMs, 1000);
     assert.equal(loaded.config.thresholdMode, 'adaptive');
-    assert.equal(loaded.config.targetSignalsPerMin, 3);
+    assert.equal(loaded.config.targetTradesPerMin, 3);
 });
 
-test('a legacy save without the adaptive fields loads with an empty window', () => {
-    const loaded = loadTampered((state) => { delete state.recentAbsChanges; delete state.lastIntervalMs; });
-    assert.deepEqual(loaded.recentAbsChanges, []);
-    assert.equal(loaded.lastIntervalMs, null);
+test('a legacy save without the adaptive fields, or from the percentile version, loads in warm-up', () => {
+    const legacy = loadTampered((state) => { delete state.adaptiveThetaPct; delete state.warmupAbsChanges; delete state.lastIntervalMs; });
+    assert.equal(legacy.adaptiveThetaPct, null);
+    assert.deepEqual(legacy.warmupAbsChanges, []);
+    assert.equal(legacy.lastIntervalMs, null);
+    const percentile = loadTampered((state) => { state.recentAbsChanges = [0.1, -5, 'x']; delete state.adaptiveThetaPct; });
+    assert.equal(percentile.adaptiveThetaPct, null);
+    assert.deepEqual(percentile.warmupAbsChanges, []);
+    assert.equal('recentAbsChanges' in percentile, false);
 });
 
-test('an invalid window entry loads as null', () => {
-    assert.equal(loadTampered((state) => { state.recentAbsChanges = [0.1, -0.1]; }), null);
-    assert.equal(loadTampered((state) => { state.recentAbsChanges = [0.1, 'x']; }), null);
-    assert.equal(loadTampered((state) => { state.recentAbsChanges = 'x'; }), null);
-    assert.equal(loadTampered((state) => { state.recentAbsChanges = new Array(61).fill(0.1); }), null);
-    assert.notEqual(loadTampered((state) => { state.recentAbsChanges = new Array(60).fill(0.1); }), null);
+test('an invalid warm-up sample or window length loads as null', () => {
+    assert.equal(loadTampered((state) => { state.warmupAbsChanges = [0.1, -0.1]; }), null);
+    assert.equal(loadTampered((state) => { state.warmupAbsChanges = [0.1, 'x']; }), null);
+    assert.equal(loadTampered((state) => { state.warmupAbsChanges = 'x'; }), null);
+    assert.equal(loadTampered((state) => { state.warmupAbsChanges = new Array(21).fill(0.1); }), null);
+    assert.notEqual(loadTampered((state) => { state.warmupAbsChanges = new Array(20).fill(0.1); }), null);
 });
 
-test('an invalid lastIntervalMs loads as null', () => {
+test('an invalid adaptiveThetaPct or lastIntervalMs loads as null', () => {
+    for (const bad of [-1, 0, 'x', NaN]) {
+        assert.equal(loadTampered((state) => { state.adaptiveThetaPct = bad; }).adaptiveThetaPct, null, String(bad));
+    }
     assert.equal(loadTampered((state) => { state.lastIntervalMs = -5; }).lastIntervalMs, null);
     assert.equal(loadTampered((state) => { state.lastIntervalMs = 'x'; }).lastIntervalMs, null);
 });
