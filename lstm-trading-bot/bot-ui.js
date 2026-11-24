@@ -1,6 +1,6 @@
 // Bot panel: wires the bzUI controls to the bot and renders wallet, signal, benchmark, equity chart and trade history.
 import { equity, pnl, positionOf } from './wallet.js';
-import { benchmarkEquity, parseBotConfig } from './trading-bot.js';
+import { ADAPTIVE_MIN_SAMPLES, benchmarkEquity, parseBotConfig } from './trading-bot.js';
 import { tradesToCsv } from './csv.js';
 
 // Formats USDT with 2 decimals and thousands separators.
@@ -13,6 +13,19 @@ const formatPct = (value) => `${value >= 0 ? '+' : ''}${value.toFixed(4)}`;
 const formatClock = (ms) => new Date(ms).toLocaleTimeString('en-GB', { hourCycle: 'h23' });
 // Formats an absolute amount and percentage as "+12.34 (+0.1234%)".
 const formatPnl = (abs, pct) => `${abs >= 0 ? '+' : ''}${formatUsdt(abs)} (${formatPct(pct)}%)`;
+
+// Describes the threshold in effect, e.g. "Threshold: 0.0042% (adaptive, target 3 trades/min)".
+function describeThreshold(state, config) {
+    const { lastThreshold, warmupAbsChanges } = state;
+    // Fixed mode shows the configured value even before the first candle.
+    if (config.thresholdMode === 'fixed') return `Threshold: ${config.thresholdPct}% (fixed)`;
+    // Adaptive mode has nothing to report before a candle was evaluated.
+    if (lastThreshold === null || lastThreshold.source === 'fixed') return `Threshold: waiting for candles (adaptive, target ${config.targetTradesPerMin} trades/min)`;
+    const pct = `${lastThreshold.pct.toFixed(4)}%`;
+    // Warm-up: the fixed value is still in use.
+    if (lastThreshold.source === 'warmup') return `Threshold: ${pct} (warming up ${warmupAbsChanges.length}/${ADAPTIVE_MIN_SAMPLES}, using fixed)`;
+    return `Threshold: ${pct} (adaptive, target ${config.targetTradesPerMin} trades/min)`;
+}
 
 // Builds one trade-history row using textContent only (no HTML injection).
 function buildTradeRow(trade) {
@@ -54,6 +67,8 @@ function downloadCsv(trades) {
 export function createBotPanel({ bot, root, persist = () => {}, equityChart = null }) {
     const byId = (id) => root.querySelector(`#${id}`);
     const inputs = {
+        thresholdMode: byId('bot-threshold-mode'),
+        targetTradesPerMin: byId('bot-target-rate'),
         thresholdPct: byId('bot-threshold'),
         buyPct: byId('bot-buy-pct'),
         sellPct: byId('bot-sell-pct'),
@@ -78,6 +93,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
         raw.mapeGate = gateInput.checked;
         bot.setConfig(parseBotConfig(raw, bot.config));
         showConfig();
+        render();
         persist();
     };
 
@@ -141,6 +157,7 @@ export function createBotPanel({ bot, root, persist = () => {}, equityChart = nu
         byId('bot-signal').textContent = state.lastSignal === null
             ? '-'
             : `${state.lastSignal} (${formatPct(state.lastChangePct)}%)${reasonNote}`;
+        byId('bot-threshold-live').textContent = describeThreshold(state, bot.config);
         // Without a benchmark the readout shows a dash.
         if (state.benchmark === null) byId('bot-benchmark').textContent = '-';
         // Price-dependent readouts need a mark price.

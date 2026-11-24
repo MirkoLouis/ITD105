@@ -1,5 +1,7 @@
 // Persistence of the bot state in localStorage; corrupt or old data loads as null (fresh wallet).
 
+import { ADAPTIVE_MIN_SAMPLES } from './trading-bot.js';
+
 export const STORAGE_KEY = 'lstm-bot-state-v1';
 const WALLET_FIELDS = ['initialUsdt', 'usdt', 'btc', 'avgEntry', 'feesPaid'];
 const TRADE_REASONS = ['SIGNAL', 'STOP_LOSS', 'TAKE_PROFIT'];
@@ -53,6 +55,13 @@ function normalizeHistory(history) {
     return history.filter(isValidPoint).slice(-1000);
 }
 
+// True for well-formed warm-up samples: at most ADAPTIVE_MIN_SAMPLES finite numbers >= 0.
+const isValidWarmup = (samples) =>
+    Array.isArray(samples) && samples.length <= ADAPTIVE_MIN_SAMPLES && samples.every((value) => isFiniteNumber(value) && value >= 0);
+
+// Keeps a value only when it is a finite number > 0, otherwise null (theta and the interval must be positive).
+const positiveOrNull = (value) => (isFiniteNumber(value) && value > 0 ? value : null);
+
 // Saves the state as JSON; returns false when storage is unavailable or full.
 export function saveBotState(state, storage = globalThis.localStorage) {
     try {
@@ -76,6 +85,10 @@ export function loadBotState(storage = globalThis.localStorage) {
     const trades = parsed.trades.map(normalizeTrade);
     // Any invalid trade invalidates the whole save.
     if (trades.some((trade) => trade === null)) return null;
+    // A legacy save (or one from the percentile version, whose recentAbsChanges is ignored) has no warm-up samples;
+    // a present but malformed list invalidates the whole save.
+    const warmupAbsChanges = parsed.warmupAbsChanges ?? [];
+    if (!isValidWarmup(warmupAbsChanges)) return null;
     // Each ternary below keeps a field only when it has the expected type, otherwise it falls back to a safe default.
     return {
         running: false,
@@ -87,6 +100,9 @@ export function loadBotState(storage = globalThis.localStorage) {
         lastReason: typeof parsed.lastReason === 'string' ? parsed.lastReason : null,
         benchmark: normalizeBenchmark(parsed.benchmark),
         equityHistory: normalizeHistory(parsed.equityHistory),
+        adaptiveThetaPct: positiveOrNull(parsed.adaptiveThetaPct),
+        warmupAbsChanges,
+        lastIntervalMs: positiveOrNull(parsed.lastIntervalMs),
         config: isPlainObject(parsed.config) ? parsed.config : null,
     };
 }

@@ -331,6 +331,7 @@ function runBot(last, accuracy) {
     const result = bot.onClosedCandle({
       time: last.time,
       closeTime: last.time + INTERVAL_MS[INTERVAL],
+      intervalMs: INTERVAL_MS[INTERVAL],
       lastClose: last.c,
       forecastNext: forecast[0],
       mape: accuracy?.mape,

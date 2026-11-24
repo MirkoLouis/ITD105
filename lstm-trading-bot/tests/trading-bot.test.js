@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWallet } from '../wallet.js';
-import { expectedChangePct, decideSignal, parseBotConfig, createBot, checkRiskExit, benchmarkEquity } from '../trading-bot.js';
+import {
+    expectedChangePct, decideSignal, parseBotConfig, createBot, checkRiskExit, benchmarkEquity,
+    nextAdaptiveThreshold, initialAdaptiveThreshold, ADAPTIVE_MIN_SAMPLES, ADAPTIVE_ETA, THETA_MIN_PCT, THETA_MAX_PCT,
+} from '../trading-bot.js';
 
-// Fee, risk exits and the MAPE gate are off so the Task 3 tests keep their exact arithmetic.
-const DEFAULTS = { thresholdPct: 0.01, buyPct: 50, sellPct: 100, feePct: 0, stopLossPct: 0, takeProfitPct: 0, mapeGate: false };
+// Fee, risk exits and the MAPE gate are off so the Task 3 tests keep their exact arithmetic; the threshold stays fixed.
+const DEFAULTS = { thresholdMode: 'fixed', targetTradesPerMin: 3, thresholdPct: 0.01, buyPct: 50, sellPct: 100, feePct: 0, stopLossPct: 0, takeProfitPct: 0, mapeGate: false };
 const closeTo = (actual, expected, eps = 1e-6) => assert.ok(Math.abs(actual - expected) < eps, `${actual} !~ ${expected}`);
 const cashWallet = createWallet();
 const btcWallet = { ...createWallet(), usdt: 0, btc: 1 };
@@ -172,4 +175,179 @@ test('SELL sells all BTC exactly', () => {
     const { trade } = bot.onClosedCandle({ time: 2, lastClose: 100, forecastNext: 99 });
     assert.equal(trade.side, 'SELL');
     assert.equal(bot.state.wallet.btc, 0);
+});
+
+// ---- Adaptive threshold (trade-rate feedback controller) ----
+
+const ADAPTIVE = { ...DEFAULTS, thresholdMode: 'adaptive', targetTradesPerMin: 3 };
+// Builds a candle whose forecast change is `changePct` percent from a close of 100.
+const candle = (time, changePct, extra = {}) => ({ time, lastClose: 100, forecastNext: 100 * (1 + changePct / 100), intervalMs: 1000, ...extra });
+// Starts an adaptive bot and feeds it `count` candles of the same small change (all HOLD under the fixed 0.01%).
+const warmedBot = (count, changePct = 0.001, config = ADAPTIVE) => {
+    const bot = createBot({ config, wallet: createWallet() });
+    bot.start();
+    for (let time = 1; time <= count; time++) bot.onClosedCandle(candle(time, changePct));
+    return bot;
+};
+
+test('adaptive constants', () => {
+    assert.equal(ADAPTIVE_MIN_SAMPLES, 20);
+    assert.equal(ADAPTIVE_ETA, 0.3);
+    assert.equal(THETA_MIN_PCT, 0.00001);
+    assert.equal(THETA_MAX_PCT, 1);
+});
+
+test('nextAdaptiveThreshold lowers theta without a trade and raises it after one', () => {
+    closeTo(nextAdaptiveThreshold(0.01, 0, 3, 60), 0.01 * Math.exp(-0.015), 1e-12);
+    closeTo(nextAdaptiveThreshold(0.01, 1, 3, 60), 0.01 * Math.exp(0.285), 1e-12);
+});
+
+test('nextAdaptiveThreshold clamps at both bounds', () => {
+    assert.equal(nextAdaptiveThreshold(THETA_MIN_PCT, 0, 60, 60), THETA_MIN_PCT);
+    assert.equal(nextAdaptiveThreshold(THETA_MAX_PCT, 1, 0.1, 60), THETA_MAX_PCT);
+});
+
+test('nextAdaptiveThreshold caps p at 1 when the target exceeds the candle rate', () => {
+    closeTo(nextAdaptiveThreshold(0.01, 0, 3, 1), 0.01 * Math.exp(-0.3), 1e-12);
+    closeTo(nextAdaptiveThreshold(0.01, 1, 3, 1), 0.01, 1e-12);
+});
+
+test('initialAdaptiveThreshold takes p90 of the warm-up samples or the fallback', () => {
+    const samples = Array.from({ length: 20 }, (_, i) => i * 0.001);
+    closeTo(initialAdaptiveThreshold(samples, 0.01), 0.018, 1e-12);
+    assert.equal(initialAdaptiveThreshold(new Array(20).fill(0), 0.01), 0.01);
+    assert.equal(samples[0], 0);
+});
+
+test('parseBotConfig validates thresholdMode and targetTradesPerMin (legacy targetSignalsPerMin accepted)', () => {
+    assert.equal(parseBotConfig({ thresholdMode: 'bogus' }, ADAPTIVE).thresholdMode, 'adaptive');
+    assert.equal(parseBotConfig({ thresholdMode: 'fixed' }, ADAPTIVE).thresholdMode, 'fixed');
+    assert.equal(parseBotConfig({ thresholdMode: 'adaptive' }, DEFAULTS).thresholdMode, 'adaptive');
+    for (const bad of ['0', '-1', '61', '', 'abc']) {
+        assert.equal(parseBotConfig({ targetTradesPerMin: bad }, ADAPTIVE).targetTradesPerMin, 3, bad);
+    }
+    assert.equal(parseBotConfig({ targetTradesPerMin: '5' }, ADAPTIVE).targetTradesPerMin, 5);
+    assert.equal(parseBotConfig({ targetTradesPerMin: '0.1' }, ADAPTIVE).targetTradesPerMin, 0.1);
+    assert.equal(parseBotConfig({ targetTradesPerMin: '60' }, ADAPTIVE).targetTradesPerMin, 60);
+    assert.equal(parseBotConfig({ targetSignalsPerMin: '4' }, ADAPTIVE).targetTradesPerMin, 4);
+    assert.equal(parseBotConfig({ targetTradesPerMin: '5', targetSignalsPerMin: '4' }, ADAPTIVE).targetTradesPerMin, 5);
+    assert.equal(parseBotConfig({}, { thresholdPct: 0.01 }).thresholdMode, 'adaptive');
+    assert.equal(parseBotConfig({}, { thresholdPct: 0.01 }).targetTradesPerMin, 3);
+    assert.equal(parseBotConfig({}, { thresholdPct: 0.01, targetSignalsPerMin: 5 }).targetTradesPerMin, 5);
+});
+
+test('the first 20 evaluated candles use the fixed threshold (warm-up), then theta is the p90 of the samples', () => {
+    const bot = createBot({ config: ADAPTIVE, wallet: createWallet() });
+    bot.start();
+    // Each of the first 20 candles is a warm-up candle.
+    for (let time = 1; time <= 20; time++) {
+        bot.onClosedCandle(candle(time, 0.001));
+        assert.equal(bot.state.lastThreshold.source, 'warmup', `candle ${time}`);
+        assert.equal(bot.state.lastThreshold.pct, 0.01);
+    }
+    assert.equal(bot.state.trades.length, 0);
+    assert.equal(bot.state.adaptiveThetaPct, null);
+    // The 21st decides with theta = p90 of 20 samples of 0.001 -> 0.001; a 0.003 forecast beats it.
+    const result = bot.onClosedCandle(candle(21, 0.003));
+    assert.equal(bot.state.lastThreshold.source, 'adaptive');
+    closeTo(bot.state.lastThreshold.pct, 0.001, 1e-9);
+    assert.equal(result.signal, 'BUY');
+    // A trade raises theta: 0.001 * exp(0.3 * (1 - 3/60)).
+    closeTo(bot.state.adaptiveThetaPct, 0.001 * Math.exp(0.285), 1e-9);
+});
+
+test('adaptive BUY needs changePct strictly above theta; a hold lowers theta', () => {
+    const bot = warmedBot(20, 0.001);
+    assert.equal(bot.onClosedCandle(candle(21, 0.001)).signal, 'HOLD');
+    closeTo(bot.state.adaptiveThetaPct, 0.001 * Math.exp(-0.015), 1e-9);
+});
+
+test('a risk exit counts as a trade for the controller', () => {
+    const config = { ...ADAPTIVE, stopLossPct: 0.5 };
+    const bot = warmedBot(20, 0.001, config);
+    bot.onClosedCandle(candle(21, 0.003));
+    const before = bot.state.adaptiveThetaPct;
+    // Price 0.6% below the entry: stop-loss sells regardless of the forecast.
+    const result = bot.onClosedCandle({ time: 22, lastClose: 99.4, forecastNext: 99.4, intervalMs: 1000 });
+    assert.equal(result.reason, 'STOP_LOSS');
+    closeTo(bot.state.adaptiveThetaPct, before * Math.exp(0.285), 1e-9);
+});
+
+test('the warm-up samples are capped at 20', () => {
+    const bot = warmedBot(40, 0.001);
+    assert.ok(bot.state.warmupAbsChanges.length <= ADAPTIVE_MIN_SAMPLES);
+    assert.equal(bot.state.lastIntervalMs, 1000);
+});
+
+test('changing intervalMs goes back to warm-up', () => {
+    const bot = warmedBot(25, 0.001);
+    assert.equal(bot.state.lastThreshold.source, 'adaptive');
+    bot.onClosedCandle(candle(26, 0.001, { intervalMs: 2000 }));
+    assert.equal(bot.state.lastThreshold.source, 'warmup');
+    assert.equal(bot.state.adaptiveThetaPct, null);
+    assert.equal(bot.state.warmupAbsChanges.length, 1);
+    assert.equal(bot.state.lastIntervalMs, 2000);
+});
+
+test('reset goes back to warm-up', () => {
+    const bot = warmedBot(25, 0.001);
+    bot.reset();
+    assert.deepEqual(bot.state.warmupAbsChanges, []);
+    assert.equal(bot.state.adaptiveThetaPct, null);
+    assert.equal(bot.state.lastIntervalMs, null);
+    assert.equal(bot.state.lastThreshold, null);
+});
+
+test('fixed mode ignores the controller', () => {
+    const bot = warmedBot(30, 0.001, DEFAULTS);
+    assert.equal(bot.state.lastThreshold.source, 'fixed');
+    assert.equal(bot.state.lastThreshold.pct, 0.01);
+    assert.deepEqual(bot.state.warmupAbsChanges, []);
+    assert.equal(bot.state.adaptiveThetaPct, null);
+});
+
+test('a candle without intervalMs is treated as fixed mode', () => {
+    const bot = createBot({ config: ADAPTIVE, wallet: createWallet() });
+    bot.start();
+    const result = bot.onClosedCandle({ time: 1, lastClose: 100, forecastNext: 100.005 });
+    assert.equal(result.signal, 'HOLD');
+    assert.equal(bot.state.lastThreshold.source, 'fixed');
+    assert.deepEqual(bot.state.warmupAbsChanges, []);
+});
+
+// Seeded PRNG (mulberry32) so the simulation is reproducible.
+const mulberry32 = (seed) => () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+// Runs the real bot for 3600 1s candles on an AR(1) forecast-change series; returns trades per minute over the last 50 minutes.
+const simulateTradesPerMinute = (bias) => {
+    const random = mulberry32(42);
+    // Standard normal sample via the Box-Muller transform.
+    const gaussian = () => Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random());
+    const bot = createBot({ config: ADAPTIVE, wallet: createWallet() });
+    bot.start();
+    let change = 0;
+    let lastClose = 60000;
+    const tradeTimes = [];
+    for (let time = 1; time <= 3600; time++) {
+        change = 0.8 * change + 0.0015 * gaussian() + bias * 0.2;
+        lastClose *= 1 + 0.00002 * gaussian();
+        const result = bot.onClosedCandle({ time, lastClose, forecastNext: lastClose * (1 + change / 100), intervalMs: 1000 });
+        if (result.trade) tradeTimes.push(time);
+    }
+    return tradeTimes.filter((time) => time > 600).length / 50;
+};
+
+test('the controller holds 2-4 trades per minute in a seeded long run', () => {
+    const rate = simulateTradesPerMinute(0);
+    assert.ok(rate >= 2 && rate <= 4, `rate ${rate}`);
+});
+
+test('the controller still trades 2-4 per minute when forecasts lean one way', () => {
+    const rate = simulateTradesPerMinute(0.002);
+    assert.ok(rate >= 2 && rate <= 4, `rate ${rate}`);
 });
