@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BTC/USDT LSTM forecast · bzUI</title>
+  <script>
+    // Apply the saved or OS theme before first paint to avoid a flash.
+    (function () {
+      try {
+        var saved = localStorage.getItem('bzui-theme');
+        var theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+      } catch (e) { /* storage unavailable */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/bonezegei/bzUI/dist/bzui.min.css">
+  <style>
+    .btc-page { padding: var(--bz-space-6) var(--bz-space-4); }
+    .btc-card, .btc-net { padding: var(--bz-space-5); }
+    .btc-card { display: flex; flex-direction: column; gap: var(--bz-space-3); }
+    .btc-card .bz-chart canvas { display: block; width: 100%; }
+    .btc-controls { display: flex; flex-wrap: wrap; gap: var(--bz-space-3) var(--bz-space-4); align-items: center; }
+    .btc-controls label, .btc-controls > span { white-space: nowrap; }
+    .btc-controls select { width: auto; }
+    .btc-info { display: flex; flex-direction: column; gap: var(--bz-space-1); }
+    .btc-info p { margin: 0; }
+    /* Forecast series uses palette slot 2; pin it to blue in both themes. */
+    :root, :root[data-theme="dark"] { --bz-chart-color-2: #2563eb; }
+    #live-dot { width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; display: inline-block; }
+    #live-dot[data-state="on"] { background: #16a34a; animation: live-pulse 1s infinite; }
+    #live-dot[data-state="error"] { background: #dc2626; }
+    @keyframes live-pulse { 50% { opacity: 0.35; } }
+    .btc-net { display: flex; flex-direction: column; gap: var(--bz-space-3); }
+    .btc-net-wrap { overflow-x: auto; }
+    #lstm-graph { width: 100%; min-width: 760px; height: auto; display: block; }
+    #lstm-graph .lg-edge { stroke: var(--bz-border, #94a3b8); stroke-width: 1.5; fill: none; }
+    #lstm-graph .lg-dashed { stroke-dasharray: 5 4; }
+    #lstm-graph .lg-weight { font-size: 12px; fill: var(--bz-text-muted, #64748b); }
+    #lstm-graph .lg-node rect { fill: var(--bz-surface, #ffffff); stroke: #2563eb; stroke-width: 1.5; }
+    #lstm-graph .lg-y rect { fill: #2563eb; }
+    #lstm-graph .lg-y .lg-label, #lstm-graph .lg-y .lg-sub { fill: #ffffff; }
+    #lstm-graph .lg-label { font-size: 14px; font-weight: 600; fill: var(--bz-text, #0f172a); }
+    #lstm-graph .lg-sub { font-size: 12px; fill: #2563eb; font-weight: 600; }
+    .ug-stage { position: relative; height: 420px; border: 1px solid var(--bz-border, #e5e7eb); border-radius: var(--bz-radius-md, 8px); overflow: hidden; touch-action: none; }
+    .ug-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    .ug-canvas:focus-visible { outline: 2px solid var(--bz-focus-ring, #2563eb); outline-offset: -2px; }
+  </style>
+</head>
+<body>
+  <main class="bz-container btc-page">
+    <header class="bz-flex bz-justify-between bz-items-center bz-wrap bz-gap-4 bz-mb-6">
+      <div>
+        <h1 class="bz-text-3xl bz-font-bold bz-m-0">BTC/USDT · LSTM forecast</h1>
+        <p class="bz-text-muted bz-m-0">Binance public klines, the selected number of recent candles (up to 1000). Vertical lines mark the LSTM input window; the line after the last candle is the forecast.</p>
+      </div>
+    </header>
+
+    <section class="bz-card btc-card" aria-labelledby="t-chart">
+      <div class="btc-controls">
+        <h2 id="t-chart" class="bz-text-lg bz-font-semibold bz-m-0">Chart</h2>
+        <label class="bz-flex bz-items-center bz-gap-2">
+          <span>Style</span>
+          <select id="chart-type" class="bz-form-control">
+            <option value="candlestick" selected>Candlestick</option>
+            <option value="line">Line</option>
+            <option value="spline">Spline</option>
+          </select>
+        </label>
+        <label class="bz-flex bz-items-center bz-gap-2">
+          <span>Timeframe</span>
+          <select id="timeframe" class="bz-form-control">
+            <option value="1s" selected>1 second</option>
+            <option value="1m">1 minute</option>
+            <option value="5m">5 minutes</option>
+            <option value="15m">15 minutes</option>
+            <option value="1h">1 hour</option>
+            <option value="4h">4 hours</option>
+            <option value="1d">1 day</option>
+          </select>
+        </label>
+        <label class="bz-flex bz-items-center bz-gap-2">
+          <span>Data</span>
+          <select id="candle-count" class="bz-form-control">
+            <option value="100">100 candles</option>
+            <option value="300" selected>300 candles</option>
+            <option value="500">500 candles</option>
+            <option value="1000">1000 candles</option>
+          </select>
+        </label>
+        <label class="bz-flex bz-items-center bz-gap-2">
+          <span>Window size</span>
+          <select id="window-size" class="bz-form-control">
+            <option value="5">5 candles</option>
+            <option value="10">10 candles</option>
+            <option value="20" selected>20 candles</option>
+            <option value="30">30 candles</option>
+            <option value="60">60 candles</option>
+          </select>
+        </label>
+        <span class="bz-flex bz-items-center bz-gap-2"><span id="live-dot" data-state="idle"></span><span class="bz-text-muted">Live every 1s</span></span>
+      </div>
+      <div class="bz-chart"><canvas id="c-btc" aria-label="BTC/USDT chart with LSTM forecast"></canvas></div>
+      <div class="btc-info">
+        <p id="status" class="bz-text-muted" role="status"></p>
+        <p id="window-info" class="bz-text-muted"></p>
+        <p id="forecast" class="bz-font-semibold" role="status"></p>
+        <p id="accuracy" role="status"></p>
+      </div>
+      <p class="bz-text-muted bz-m-0">Educational demo only. A tiny LSTM on 1-second prices is not a trading signal.</p>
+    </section>
+
+    <section class="bz-card btc-net bz-mt-6" id="bot-panel" aria-labelledby="t-bot">
+      <div class="btc-controls">
+        <h2 id="t-bot" class="bz-text-lg bz-font-semibold bz-m-0">Paper-trading bot</h2>
+        <span id="bot-status" class="bz-font-semibold" role="status">Stopped</span>
+        <button type="button" id="bot-start" class="bz-btn bz-btn-outline">Start</button>
+        <button type="button" id="bot-stop" class="bz-btn bz-btn-outline">Stop</button>
+        <button type="button" id="bot-reset" class="bz-btn bz-btn-outline">Reset</button>
+      </div>
+      <p class="bz-text-muted bz-m-0">Simulated wallet only; no exchange account, API key or real orders. The bot evaluates once per closed candle.</p>
+      <div class="btc-controls">
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Threshold (%)</span><input id="bot-threshold" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Buy size (% of USDT)</span><input id="bot-buy-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Sell size (% of BTC)</span><input id="bot-sell-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Fee (%)</span><input id="bot-fee" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Stop-loss (%, 0 = off)</span><input id="bot-stop-loss" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Take-profit (%, 0 = off)</span><input id="bot-take-profit" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><input id="bot-mape-gate" type="checkbox"><span>MAPE gate (hold while LSTM MAPE &ge; baseline)</span></label>
+        <button type="button" id="bot-export-csv" class="bz-btn bz-btn-outline">Export CSV</button>
+      </div>
+      <div class="btc-info">
+        <p>Initial balance: <strong><span id="bot-initial">10,000.00</span> USDT</strong></p>
+        <p>USDT: <strong id="bot-usdt">10,000.00</strong> · BTC: <strong id="bot-btc">0.000000</strong> · Position: <strong id="bot-position">CASH</strong></p>
+        <p>Equity: <strong id="bot-equity">10,000.00</strong> USDT · PnL: <strong id="bot-pnl">0.00 (0.0000%)</strong></p>
+        <p>Buy &amp; hold: <strong id="bot-benchmark">-</strong></p>
+        <p>Last signal: <strong id="bot-signal">-</strong></p>
+        <p id="bot-error" role="alert" class="bz-m-0" style="color: var(--bz-danger, #dc2626)" hidden></p>
+      </div>
+      <h3 class="bz-font-semibold bz-m-0">Equity change vs. initial (USDT)</h3>
+      <div class="bz-chart"><canvas id="c-equity" aria-label="Equity curve of the bot versus buy and hold"></canvas></div>
+      <div class="btc-net-wrap">
+        <table class="bz-table">
+          <thead>
+            <tr><th>Time</th><th>Side</th><th>Reason</th><th>Price</th><th>Qty (BTC)</th><th>Fee (USDT)</th><th>Forecast Δ%</th><th>USDT after</th><th>BTC after</th><th>Equity after</th></tr>
+          </thead>
+          <tbody id="trade-rows"></tbody>
+        </table>
+      </div>
+      <p id="trade-empty" class="bz-text-muted bz-m-0">No trades yet. The bot trades when the forecast change crosses ±threshold.</p>
+    </section>
+
+    <section class="bz-card btc-net bz-mt-6" aria-labelledby="t-net">
+      <h2 id="t-net" class="bz-text-lg bz-font-semibold bz-m-0">Live LSTM network</h2>
+      <p class="bz-text-muted bz-m-0">One cell evaluated on the newest window. Values update every second; edge thickness follows the weight magnitude.</p>
+      <div class="btc-net-wrap">
+        <svg id="lstm-graph" viewBox="0 0 960 520" role="img" aria-label="Live LSTM cell graph with gate activations and weights"></svg>
+      </div>
+    </section>
+
+    <section class="bz-card btc-net bz-mt-6" aria-labelledby="t-unroll">
+      <h2 id="t-unroll" class="bz-text-lg bz-font-semibold bz-m-0">Unrolled LSTM cells</h2>
+      <p class="bz-text-muted bz-m-0">One cell per time step in the window, drawn as a force-directed network. Each cell's h and c feed the next cell, and the last cell feeds the forecast ŷ. Drag nodes, drag the background to pan, and scroll to zoom.</p>
+      <div class="bz-flex bz-items-center bz-gap-2 bz-wrap">
+        <button type="button" id="ug-out" class="bz-btn bz-btn-outline" aria-keyshortcuts="-">Zoom out</button>
+        <button type="button" id="ug-in" class="bz-btn bz-btn-outline" aria-keyshortcuts="+">Zoom in</button>
+        <button type="button" id="ug-reset" class="bz-btn bz-btn-outline" aria-keyshortcuts="0">Reset view</button>
+      </div>
+      <div class="ug-stage" id="ug-stage">
+        <canvas id="ug-canvas" class="ug-canvas" tabindex="0" role="img" aria-label="Unrolled LSTM network graph, one cell per window step"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <div id="ug-tip" class="bz-tooltip bz-chart-tooltip" aria-hidden="true" hidden></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
