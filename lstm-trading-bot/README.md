@@ -1,6 +1,6 @@
 # ITD105 Lab: LSTM Crypto Trading Bot (BTC/USDT)
 
-## Summary of the Activity
+## Project Overview
 This project extends the course reference app [msuiit-ph/BZUI-LSTM-BTCUSDT](https://github.com/msuiit-ph/BZUI-LSTM-BTCUSDT) (a browser-only BTC/USDT forecaster built with a hand-written single-cell **LSTM** and the bzUI component library) into an automated **paper-trading bot**. Every time a new closed candle arrives, the LSTM forecasts the next price, the bot turns the forecast into a **BUY / SELL / HOLD** decision using a percentage threshold, and a simulated order is executed against an **in-code dummy wallet** (virtual USDT and BTC held in JavaScript state). The page shows the wallet, equity, PnL, a Start/Stop/Reset control set and a live trade table next to the original forecast chart and LSTM network visualizations.
 
 **Safety statement.** No exchange account, testnet account, API key or real funds are used or required. The only network call is the public, keyless `https://api.binance.com/api/v3/klines` market-data endpoint that the reference app already used. No order, account or authenticated endpoint is ever called; all trades exist only as numbers in the browser.
@@ -59,9 +59,9 @@ npm test
 
 This runs `node --test tests/*.test.js` (37 tests covering the wallet, signal/threshold logic, fees, risk exits, MAPE gate, input validation, persistence and CSV export).
 
-## Screenshots
+## Test Results & Screenshots
 
-Screenshots were produced by an automated headless Chromium run (fresh browser profile, 1400 px wide, 2x pixel ratio). They show one continuous test run; the bot was stopped just before capturing so all three images show the same state. The initial-state image below is the bot card before pressing Start (10,000.00 USDT, 0 BTC).
+The screenshots were produced by an automated headless Chromium run (fresh browser profile, 1400 px wide, 2x pixel ratio) while the bot was **Running**. The three images were captured back-to-back with no trade in between. The initial-state image (bot card before pressing Start: 10,000.00 USDT, 0 BTC) is `0_Initial.png` in the same folder and shown at the end of this section. Readouts such as buy-and-hold and MAPE update every second, so numbers quoted below are those visible in the images.
 
 <table>
   <tr>
@@ -77,28 +77,22 @@ Screenshots were produced by an automated headless Chromium run (fresh browser p
 
 Initial state: ![Initial state](screenshots/0_Initial.png)
 
-## Test Results
-
-**Setup.** Attempt A used the shipped defaults on the **1m** timeframe (threshold 0.01%, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off). It ran for the full 15-minute cap and produced **no trade at all**: over about 15 closed candles the forecast never moved more than 0.01% from the last close. Attempt B, which produced the screenshots, used the **1s** timeframe, 300 candles, window 20, and a lowered **threshold of 0.002%**; every other setting was the default. The first BUY and the SELL both occurred within about 15 seconds.
+**Setup.** Attempt A used the shipped defaults on the **1m** timeframe (threshold 0.01%, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off). It ran for the full 15-minute cap and produced **no trade at all**: over about 15 closed candles the forecast never moved more than 0.01% from the last close. Attempt B, which produced the screenshots, used the **1s** timeframe, 300 candles, window 20, and a lowered **threshold of 0.002%**; every other setting was the default. The first BUY occurred about 70 seconds after pressing Start and the SELL one second later.
 
 **Trades (attempt B, newest first; time = candle close, UTC):**
 
 | Time | Side | Reason | Price | Qty (BTC) | Fee (USDT) | Forecast Δ% | USDT after | BTC after | Equity after |
 |---|---|---|---|---|---|---|---|---|---|
-| 00:14:46 | SELL | SIGNAL | 61,250.93 | 0.158026 | 9.68 | -0.0022 | 9,982.07 | 0.000000 | 9,982.07 |
-| 00:14:41 | BUY | SIGNAL | 61,257.09 | 0.005096 | 0.31 | +0.0031 | 312.50 | 0.158026 | 9,992.73 |
-| 00:14:40 | BUY | SIGNAL | 61,257.09 | 0.010193 | 0.63 | +0.0044 | 625.00 | 0.152930 | 9,993.04 |
-| 00:14:39 | BUY | SIGNAL | 61,245.51 | 0.020389 | 1.25 | +0.0047 | 1,250.00 | 0.142737 | 9,992.01 |
-| 00:14:38 | BUY | SIGNAL | 61,240.62 | 0.040782 | 2.50 | +0.0028 | 2,500.00 | 0.122348 | 9,992.66 |
-| 00:14:36 | BUY | SIGNAL | 61,238.65 | 0.081566 | 5.00 | +0.0043 | 5,000.00 | 0.081566 | 9,995.00 |
+| 00:28:50 | SELL | SIGNAL | 61,264.55 | 0.081532 | 4.99 | -0.0029 | 9,990.00 | 0.000000 | 9,990.00 |
+| 00:28:49 | BUY | SIGNAL | 61,264.55 | 0.081532 | 5.00 | +0.0021 | 5,000.00 | 0.081532 | 9,995.00 |
 
-**Final readouts.** USDT 9,982.07, BTC 0, position CASH, equity **9,982.07**, PnL **-17.93 USDT (-0.1793%)**. The buy-and-hold benchmark ended at 9,990.52 (**-9.48 USDT, -0.0948%**), so the bot trailed buy-and-hold by about 8.45 USDT. LSTM MAPE was **0.004%** against **0.003%** for the repeat-last-close baseline over 22 predicted candles.
+**Final readouts (as in the screenshots).** Status Running, USDT 9,990.00, BTC 0, position CASH, equity **9,990.00**, PnL **-10.00 USDT (-0.1000%)**. The buy-and-hold benchmark stood at 9,974.36 (**-25.64 USDT, -0.2564%**), so the bot was ahead of buy-and-hold by about 15.64 USDT. Over 75 predicted candles the LSTM MAPE was **0.011%** against **0.008%** for the repeat-last-close baseline.
 
 **Analysis.**
-- The bot is mechanically correct: each BUY spends half of the remaining USDT (5,000, 2,500, 1,250, 625, 312.50), the fee is deducted from the spent amount, the final SELL empties the BTC exactly to 0, and the minimum-order rule is what finally stops further buying. The final trade is a SELL with a negative forecast, as the strategy requires.
-- Total fees were about 19.37 USDT (0.1% on each of six orders, with the SELL being the largest). That is larger than the net loss of 17.93 USDT, so before fees the six trades were roughly break-even to slightly positive (about +1.4 USDT). Fees, not bad direction calls, produced the loss. Between 1-second candles the BTC price moves by a few USDT while a round trip costs about 0.2% (about 12 USDT per 6,100 USDT of BTC), so a 0.002% threshold trades on moves far smaller than the fee.
-- The forecast deltas that triggered trades (+0.0027% to +0.0047%, then -0.0022%) are tiny, and the price barely moved during the run (61,238 to 61,257). The scattered BUYs on rising forecasts followed a short upward drift, while the SELL came when the forecast turned down.
-- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. In this run its MAPE (0.004%) was slightly *worse* than the trivial "next price = last close" baseline (0.003%), and the same pattern appeared in every reference check taken during development (for example 0.007% vs 0.004% and 0.007% vs 0.006%). At these horizons price changes are close to a random walk, so a forecast that is not better than the naive baseline does not carry exploitable information; the BUY/SELL signals are essentially noise crossing a very low threshold. With the shipped 0.01% threshold the bot simply stayed in HOLD on the 1m run (attempt A), which is the more sensible behavior. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal; a single 10-second run is a demonstration of the mechanics, not statistical evidence of profitability.
+- The bot is mechanically correct: the BUY spent 50% of the free USDT (5,000.00) and paid a 0.1% fee on it (5.00), and the SELL emptied the BTC holding exactly to 0 and paid a 0.1% fee on the proceeds (4.99). Equity after the BUY is 9,995.00 (the entry fee), and after the SELL 9,990.00.
+- Both orders were filled at the same price (61,264.55), so the round trip earned nothing and the whole loss of 10.00 USDT is the two fees (9.99 plus rounding). The trades were triggered by forecast deltas of +0.0021% and -0.0029%, far below the 0.2% cost of a round trip at a 0.1% fee, so a threshold this low is only useful to demonstrate the mechanics.
+- The bot beat buy-and-hold only because it sat in cash while BTC drifted down during the run (the chart shows the price falling from about 61.4k at the start of the window); this is the direction of the market, not evidence of skill. Buy-and-hold would also have lost money here, and a single two-trade run is not statistical evidence either way.
+- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. Its MAPE (0.011%) is *worse* than the trivial "next price = last close" baseline (0.008%), and the same pattern appeared in every other accuracy check taken during development (for example 0.007% vs 0.004%, 0.007% vs 0.006%, 0.004% vs 0.003%). At these horizons price changes are close to a random walk, so a forecast that does not beat the naive baseline carries no exploitable information; the 20-step forecast curve at the right of the price chart (a steep fall to about 61,138) is an extrapolation of recent noise, and the BUY/SELL signals are essentially noise crossing a very low threshold. With the shipped 0.01% threshold the bot simply stayed in HOLD on the 1m run (attempt A), which is the more sensible behavior. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal.
 - Display note: the unrolled-graph canvas in screenshot 3 is a force-directed layout, so a few early steps can sit partly outside the frame; it can be panned and zoomed in the app.
 
 ## Changes from the Provided Source Code & Why
