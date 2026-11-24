@@ -3,7 +3,12 @@ import { createWallet, equity, executeBuy, executeSell } from './wallet.js';
 
 export const MIN_ORDER_USDT = 10;
 export const MAX_EQUITY_POINTS = 1000;
+export const ADAPTIVE_WINDOW = 60;
+export const ADAPTIVE_MIN_SAMPLES = 20;
+const THRESHOLD_MODES = ['adaptive', 'fixed'];
 export const DEFAULT_CONFIG = {
+    thresholdMode: 'adaptive',
+    targetSignalsPerMin: 3,
     thresholdPct: 0.01,
     buyPct: 50,
     sellPct: 100,
@@ -19,6 +24,23 @@ const percentToFraction = (pct) => pct / 100;
 // Expected percent change from the last close to the forecast price.
 export function expectedChangePct(forecastPrice, lastClose) {
     return (forecastPrice / lastClose - 1) * 100;
+}
+
+// Quantile of |changePct| that yields about `targetSignalsPerMin` signals per minute (<= 0 means every candle may signal).
+export function adaptiveQuantile(targetSignalsPerMin, candlesPerMinute) {
+    return 1 - targetSignalsPerMin / candlesPerMinute;
+}
+
+// Percentile threshold of recent |changePct| values; null while fewer than ADAPTIVE_MIN_SAMPLES exist (warm-up).
+export function adaptiveThresholdPct(recentAbsChanges, targetSignalsPerMin, candlesPerMinute) {
+    const quantile = adaptiveQuantile(targetSignalsPerMin, candlesPerMinute);
+    // Target at or above the candle rate: every candle may signal.
+    if (quantile <= 0) return 0;
+    // Not enough history yet.
+    if (recentAbsChanges.length < ADAPTIVE_MIN_SAMPLES) return null;
+    const sorted = [...recentAbsChanges].sort((a, b) => a - b);
+    const index = Math.min(Math.floor(quantile * sorted.length), sorted.length - 1);
+    return sorted[index];
 }
 
 // Chooses BUY, SELL or HOLD from the forecast change, holdings and minimum order size.
@@ -73,6 +95,9 @@ const FIELD_BOUNDS = {
     takeProfitPct: { min: 0, max: 100 },
 };
 
+// Bounds of the target signal rate per minute.
+const TARGET_RATE_BOUNDS = { min: 0.1, max: 60 };
+
 // Builds a config from raw UI values; invalid fields keep the previous value.
 export function parseBotConfig(raw, previous = DEFAULT_CONFIG) {
     const config = { ...previous };
@@ -81,6 +106,11 @@ export function parseBotConfig(raw, previous = DEFAULT_CONFIG) {
         config[key] = parseField(raw[key], bounds) ?? previous[key];
     }
     config.mapeGate = typeof raw.mapeGate === 'boolean' ? raw.mapeGate : Boolean(previous.mapeGate);
+    // Unknown modes keep the previous mode (or the default for configs saved before the mode existed).
+    const previousMode = previous.thresholdMode ?? DEFAULT_CONFIG.thresholdMode;
+    config.thresholdMode = THRESHOLD_MODES.includes(raw.thresholdMode) ? raw.thresholdMode : previousMode;
+    const previousTarget = previous.targetSignalsPerMin ?? DEFAULT_CONFIG.targetSignalsPerMin;
+    config.targetSignalsPerMin = parseField(raw.targetSignalsPerMin, TARGET_RATE_BOUNDS) ?? previousTarget;
     return config;
 }
 
@@ -96,6 +126,9 @@ function freshState(wallet) {
         lastReason: null,
         benchmark: null,
         equityHistory: [],
+        recentAbsChanges: [],
+        lastIntervalMs: null,
+        lastThreshold: null,
     };
 }
 
@@ -176,8 +209,28 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
         return mape >= baseMape;
     };
 
+    // Chooses this candle's threshold; adaptive mode reads the window before the candle's own change is added to it.
+    const resolveThreshold = (changePct, intervalMs) => {
+        const fixed = { pct: bot.config.thresholdPct, source: 'fixed', quantile: null };
+        // Without an interval (or in fixed mode) the fixed threshold applies and the window is left alone.
+        if (!Number.isFinite(intervalMs) || bot.config.thresholdMode !== 'adaptive') return fixed;
+        // A new interval makes old samples incomparable.
+        if (intervalMs !== bot.state.lastIntervalMs) bot.state.recentAbsChanges = [];
+        bot.state.lastIntervalMs = intervalMs;
+        const { recentAbsChanges } = bot.state;
+        const { targetSignalsPerMin } = bot.config;
+        const candlesPerMinute = 60000 / intervalMs;
+        const adaptivePct = adaptiveThresholdPct(recentAbsChanges, targetSignalsPerMin, candlesPerMinute);
+        // Keep the newest ADAPTIVE_WINDOW samples.
+        recentAbsChanges.push(Math.abs(changePct));
+        if (recentAbsChanges.length > ADAPTIVE_WINDOW) recentAbsChanges.shift();
+        // Warm-up: not enough samples, so the fixed threshold applies.
+        if (adaptivePct === null) return { ...fixed, source: 'warmup' };
+        return { pct: adaptivePct, source: 'adaptive', quantile: adaptiveQuantile(targetSignalsPerMin, candlesPerMinute) };
+    };
+
     // Picks the action for this candle: risk exit first, then the LSTM signal behind the optional MAPE gate.
-    const decide = ({ lastClose, changePct, mape, baseMape }) => {
+    const decide = ({ lastClose, changePct, mape, baseMape, thresholdPct }) => {
         const { wallet: current } = bot.state;
         const riskReason = checkRiskExit({ wallet: current, price: lastClose, stopLossPct: bot.config.stopLossPct, takeProfitPct: bot.config.takeProfitPct });
         // A risk exit overrides the LSTM signal.
@@ -185,7 +238,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
         const sellFraction = percentToFraction(bot.config.sellPct);
         const signal = decideSignal({
             changePct,
-            thresholdPct: bot.config.thresholdPct,
+            thresholdPct,
             wallet: current,
             price: lastClose,
             buyFraction: percentToFraction(bot.config.buyPct),
@@ -197,7 +250,7 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
     };
 
     // Evaluates one closed candle at most once; returns null when stopped or already seen.
-    bot.onClosedCandle = ({ time, closeTime, lastClose, forecastNext, mape, baseMape }) => {
+    bot.onClosedCandle = ({ time, closeTime, lastClose, forecastNext, mape, baseMape, intervalMs }) => {
         // Stopped bots do nothing.
         if (!bot.state.running) return null;
         // Each candle is evaluated once.
@@ -205,7 +258,9 @@ export function createBot({ config = DEFAULT_CONFIG, wallet = createWallet(), st
         bot.state.lastEvaluatedTime = time;
         ensureBenchmark(lastClose);
         const changePct = expectedChangePct(forecastNext, lastClose);
-        const { signal, reason, sellFraction } = decide({ lastClose, changePct, mape, baseMape });
+        const threshold = resolveThreshold(changePct, intervalMs);
+        bot.state.lastThreshold = threshold;
+        const { signal, reason, sellFraction } = decide({ lastClose, changePct, mape, baseMape, thresholdPct: threshold.pct });
         bot.state.lastSignal = signal;
         bot.state.lastChangePct = changePct;
         bot.state.lastReason = reason;

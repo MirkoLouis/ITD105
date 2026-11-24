@@ -120,7 +120,9 @@
       </div>
       <p class="bz-text-muted bz-m-0">Simulated wallet only; no exchange account, API key or real orders. The bot evaluates once per closed candle.</p>
       <div class="btc-controls">
-        <label class="bz-flex bz-items-center bz-gap-2"><span>Threshold (%)</span><input id="bot-threshold" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Threshold mode</span><select id="bot-threshold-mode" class="bz-form-control"><option value="adaptive">Adaptive</option><option value="fixed">Fixed</option></select></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Target signals/min</span><input id="bot-target-rate" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
+        <label class="bz-flex bz-items-center bz-gap-2"><span>Fixed threshold (%)</span><input id="bot-threshold" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
         <label class="bz-flex bz-items-center bz-gap-2"><span>Buy size (% of USDT)</span><input id="bot-buy-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
         <label class="bz-flex bz-items-center bz-gap-2"><span>Sell size (% of BTC)</span><input id="bot-sell-pct" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
         <label class="bz-flex bz-items-center bz-gap-2"><span>Fee (%)</span><input id="bot-fee" class="bz-form-control" type="text" inputmode="decimal" size="6"></label>
@@ -135,6 +137,7 @@
         <p>Equity: <strong id="bot-equity">10,000.00</strong> USDT · PnL: <strong id="bot-pnl">0.00 (0.0000%)</strong></p>
         <p>Buy &amp; hold: <strong id="bot-benchmark">-</strong></p>
         <p>Last signal: <strong id="bot-signal">-</strong></p>
+        <p id="bot-threshold-live" class="bz-text-muted bz-m-0" role="status">Threshold: -</p>
         <p id="bot-error" role="alert" class="bz-m-0" style="color: var(--bz-danger, #dc2626)" hidden></p>
       </div>
       <h3 class="bz-font-semibold bz-m-0">Equity change vs. initial (USDT)</h3>

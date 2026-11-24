@@ -79,3 +79,40 @@ test('saveBotState swallows storage errors', () => {
     const failing = { setItem: () => { throw new Error('quota'); } };
     assert.equal(saveBotState(createBot().state, failing), false);
 });
+
+// ---- Adaptive threshold persistence ----
+
+test('round trip keeps recentAbsChanges and lastIntervalMs', () => {
+    const bot = createBot();
+    bot.start(100);
+    for (let time = 1; time <= 5; time++) {
+        bot.onClosedCandle({ time, closeTime: time + 1, lastClose: 100, forecastNext: 100 + 0.001 * time, intervalMs: 1000 });
+    }
+    const storage = memoryStorage();
+    saveBotState({ ...bot.state, config: bot.config }, storage);
+    const loaded = loadBotState(storage);
+    assert.equal(loaded.recentAbsChanges.length, 5);
+    assert.deepEqual(loaded.recentAbsChanges, bot.state.recentAbsChanges);
+    assert.equal(loaded.lastIntervalMs, 1000);
+    assert.equal(loaded.config.thresholdMode, 'adaptive');
+    assert.equal(loaded.config.targetSignalsPerMin, 3);
+});
+
+test('a legacy save without the adaptive fields loads with an empty window', () => {
+    const loaded = loadTampered((state) => { delete state.recentAbsChanges; delete state.lastIntervalMs; });
+    assert.deepEqual(loaded.recentAbsChanges, []);
+    assert.equal(loaded.lastIntervalMs, null);
+});
+
+test('an invalid window entry loads as null', () => {
+    assert.equal(loadTampered((state) => { state.recentAbsChanges = [0.1, -0.1]; }), null);
+    assert.equal(loadTampered((state) => { state.recentAbsChanges = [0.1, 'x']; }), null);
+    assert.equal(loadTampered((state) => { state.recentAbsChanges = 'x'; }), null);
+    assert.equal(loadTampered((state) => { state.recentAbsChanges = new Array(61).fill(0.1); }), null);
+    assert.notEqual(loadTampered((state) => { state.recentAbsChanges = new Array(60).fill(0.1); }), null);
+});
+
+test('an invalid lastIntervalMs loads as null', () => {
+    assert.equal(loadTampered((state) => { state.lastIntervalMs = -5; }).lastIntervalMs, null);
+    assert.equal(loadTampered((state) => { state.lastIntervalMs = 'x'; }).lastIntervalMs, null);
+});
