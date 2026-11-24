@@ -77,27 +77,26 @@ The screenshots were produced by an automated headless Chromium run (fresh brows
 
 Initial state: ![Initial state](screenshots/0_Initial.png)
 
-**Setup.** Attempt A used the shipped defaults on the **1m** timeframe (threshold 0.01%, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off). It ran for the full 15-minute cap and produced **no trade at all**: over about 15 closed candles the forecast never moved more than 0.01% from the last close. Attempt B, which produced the screenshots, used the **1s** timeframe, 300 candles, window 20, and a lowered **threshold of 0.002%**; every other setting was the default. The first BUY occurred about 70 seconds after pressing Start and the SELL one second later.
+**Setup.** Attempt A used the shipped defaults on the **1m** timeframe (threshold 0.01%, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off). It ran for the full 15-minute cap and produced **no trade at all**: over about 15 closed candles the forecast never moved more than 0.01% from the last close. Attempt B, which produced the screenshots, used the **1s** timeframe, 300 candles, window 20, and a lowered **threshold of 0.002%**; every other setting was the default. The bot was started at 01:29:49 (UTC); the first BUY filled on the 01:30:28 candle, about 40 seconds later, and the SELL two seconds after that. The unrolled graph in screenshot 3 was captured about 65 seconds after page load, once the layout had settled.
 
 **Trades (attempt B, newest first; time = candle close, UTC):**
 
 | Time | Side | Reason | Price | Qty (BTC) | Fee (USDT) | Forecast Δ% | USDT after | BTC after | Equity after |
 |---|---|---|---|---|---|---|---|---|---|
-| 00:28:50 | SELL | SIGNAL | 61,264.55 | 0.081532 | 4.99 | -0.0029 | 9,990.00 | 0.000000 | 9,990.00 |
-| 00:28:49 | BUY | SIGNAL | 61,264.55 | 0.081532 | 5.00 | +0.0021 | 5,000.00 | 0.081532 | 9,995.00 |
+| 01:30:30 | SELL | SIGNAL | 61,527.47 | 0.081176 | 4.99 | -0.0055 | 9,989.58 | 0.000000 | 9,989.58 |
+| 01:30:28 | BUY | SIGNAL | 61,532.69 | 0.081176 | 5.00 | +0.0025 | 5,000.00 | 0.081176 | 9,995.00 |
 
-**Final readouts (as in the screenshots).** Status Running, USDT 9,990.00, BTC 0, position CASH, equity **9,990.00**, PnL **-10.00 USDT (-0.1000%)**. The buy-and-hold benchmark stood at 9,974.36 (**-25.64 USDT, -0.2564%**), so the bot was ahead of buy-and-hold by about 15.64 USDT. Over 75 predicted candles the LSTM MAPE was **0.011%** against **0.008%** for the repeat-last-close baseline.
+**Final readouts (as in the screenshots).** Status Running, USDT 9,989.58, BTC 0.000000, position CASH, equity **9,989.58**, PnL **-10.42 USDT (-0.1042%)**, last signal HOLD (+0.0004%). Fees paid: 5.00 + 4.99 = **9.99 USDT**. The buy-and-hold benchmark stood at 9,985.59 USDT (**-14.41 USDT, -0.1441%**), so the bot was ahead of buy-and-hold by about 4.00 USDT. Over 65 predicted candles the LSTM MAPE was **0.008%** against **0.005%** for the repeat-last-close baseline.
 
 **Analysis.**
 - The bot is mechanically correct: the BUY spent 50% of the free USDT (5,000.00) and paid a 0.1% fee on it (5.00), and the SELL emptied the BTC holding exactly to 0 and paid a 0.1% fee on the proceeds (4.99). Equity after the BUY is 9,995.00 (the entry fee), and after the SELL 9,990.00.
-- Both orders were filled at the same price (61,264.55), so the round trip earned nothing and the whole loss of 10.00 USDT is the two fees (9.99 plus rounding). The trades were triggered by forecast deltas of +0.0021% and -0.0029%, far below the 0.2% cost of a round trip at a 0.1% fee, so a threshold this low is only useful to demonstrate the mechanics.
-- The bot beat buy-and-hold only because it sat in cash while BTC drifted down during the run (the chart shows the price falling from about 61.4k at the start of the window); this is the direction of the market, not evidence of skill. Buy-and-hold would also have lost money here, and a single two-trade run is not statistical evidence either way.
-- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. Its MAPE (0.011%) is *worse* than the trivial "next price = last close" baseline (0.008%), and the same pattern appeared in every other accuracy check taken during development (for example 0.007% vs 0.004%, 0.007% vs 0.006%, 0.004% vs 0.003%). At these horizons price changes are close to a random walk, so a forecast that does not beat the naive baseline carries no exploitable information; the 20-step forecast curve at the right of the price chart (a steep fall to about 61,138) is an extrapolation of recent noise, and the BUY/SELL signals are essentially noise crossing a very low threshold. With the shipped 0.01% threshold the bot simply stayed in HOLD on the 1m run (attempt A), which is the more sensible behavior. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal.
-- Display note: the unrolled-graph canvas in screenshot 3 is a force-directed layout, so a few early steps can sit partly outside the frame; it can be panned and zoomed in the app.
+- The SELL filled 5.22 USDT per BTC below the BUY (61,532.69 to 61,527.47), costing 0.42 USDT on 0.081176 BTC. Together with the two fees (9.99 USDT) this explains the whole loss of 10.42 USDT. The trades were triggered by forecast deltas of +0.0025% and -0.0055%, far below the 0.2% cost of a round trip at a 0.1% fee, so a threshold this low is only useful to demonstrate the mechanics.
+- The equity chart shows the bot line flat at 0 until the BUY, because an all-cash wallet has constant equity, then dropping by the entry fee and the exit loss. The bot beat buy-and-hold only because it sat in cash while BTC drifted down during the run; this is the direction of the market, not evidence of skill. A single two-trade run is not statistical evidence either way.
+- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. Its MAPE (0.008%) is *worse* than the trivial "next price = last close" baseline (0.005%), and the same pattern appeared in every other accuracy check taken during development (for example 0.011% vs 0.008%, 0.007% vs 0.004%, 0.004% vs 0.003%). At these horizons price changes are close to a random walk, so a forecast that does not beat the naive baseline carries no exploitable information; the 20-step forecast curve at the right of the price chart (a rise to 61,559.62) is an extrapolation of recent noise, and the BUY/SELL signals are essentially noise crossing a very low threshold. With the shipped 0.01% threshold the bot simply stayed in HOLD on the 1m run (attempt A), which is the more sensible behavior. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal.
 
 ## Changes from the Provided Source Code & Why
 
-The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.js`, `LICENSE`) were first committed unmodified, so `git diff` shows exactly what was changed. The LSTM math in `tiny-lstm.js` and the rendering in `unroll-graph.js` were not touched. Reference files keep their 2-space indentation; new files use 4 spaces.
+The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.js`, `LICENSE`) were first committed unmodified, so `git diff` shows exactly what was changed. The LSTM math in `tiny-lstm.js` was not touched; `unroll-graph.js` received only the small layout fix listed as change 11. Reference files keep their 2-space indentation; new files use 4 spaces.
 
 1. **`app.js` (fix): live indicator never turned on**
    * **Change**: In `tick()`, after a successful update, added `liveEl.dataset.state = 'on'`.
@@ -140,3 +139,17 @@ The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.
 10. **Persistence and CSV export (`storage.js`, `csv.js`, `bot-ui.js`, `app.js`)**
     * **Change**: Bot state is saved to `localStorage` (restored stopped; corrupt, tampered or old data loads as a fresh wallet without an exception), and the trade history exports as `trades.csv` with a spreadsheet-formula-safe cell encoder.
     * **Why**: Runs survive a page reload and the history can be analyzed or attached outside the app, while treating stored and exported data as untrusted.
+
+### Fixes after testing
+
+11. **`unroll-graph.js` (fix): unrolled graph drifted left and was clipped**
+    * **Change**: Nodes are now seeded centred on the origin (x minus half the chain width), the view is re-fitted every frame while the layout is still settling (unless the user panned, zoomed or reset), and the fit leaves a wider horizontal margin for node labels.
+    * **Why**: The chain was seeded at x = 0 to 3000 while the gravity force pulls toward x = 0, and every update re-heated the simulation, so the whole graph slid about 1,460 units left under a view that was fitted only once, clipping the left edge. Centred seeding removes the net pull and the continuous fit keeps the graph in frame.
+
+12. **`bot-ui.js` / `index.html` (fix): Start/Stop button states**
+    * **Change**: In `render()`, Start is disabled while the bot is running and Stop is disabled while it is stopped; `render()` runs at panel creation, so the state is correct on load and after restoring from `localStorage`.
+    * **Why**: Prevents a double Start and makes the current state obvious; a disabled button ignores clicks.
+
+13. **`bot-ui.js` / `index.html` (fix): "No trades yet" message**
+    * **Change**: A message below the trade table is shown while the trade list is empty and hidden after the first trade (set with `hidden`, no HTML injection).
+    * **Why**: With no trades the wallet is all cash, so equity is constant and the equity chart is a flat 0 line; the message explains that this is expected until the forecast change crosses the threshold.
