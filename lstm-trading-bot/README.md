@@ -21,6 +21,18 @@ SELL  if changePct <  -threshold  and BTC * sell% * price >= 10 USDT
 HOLD  otherwise
 ```
 
+**Adaptive threshold (default).** On 1-second candles the forecast change is tiny: over a 150 s measurement `|changePct|` had p50 0.0010%, p75 0.0018%, p90 0.0038%, p95 0.0046% and a maximum of 0.0068%, so a fixed 0.01% never fires and no single fixed value holds a steady trade rate while volatility drifts. In *adaptive* mode the threshold is a rolling percentile of recent `|changePct|` values, chosen so that about `target` candles per minute exceed it:
+
+```
+candlesPerMinute = 60000 / intervalMs               // 1s -> 60, 1m -> 1
+quantile         = 1 - targetSignalsPerMin / candlesPerMinute
+quantile <= 0    -> threshold = 0                   // every candle may signal (BUY/SELL stay strict: > +t, < -t)
+otherwise        -> threshold = quantile of the last <= 60 |changePct| values
+                    (sorted ascending, index = floor(quantile * n), clamped to n - 1)
+```
+
+The threshold is computed from the window *before* the current candle's `|changePct|` is added. Warm-up: with fewer than 20 samples the fixed threshold applies (the live readout says "warming up n/20, using fixed"). Changing the timeframe clears the window, and Reset clears it too. In *fixed* mode the window is ignored. A signal is still only a trade when the wallet allows it (a SELL signal while holding no BTC is a HOLD), so trades per minute can be lower than signals per minute.
+
 Orders execute at the latest closed candle price. BUY spends a percentage of free USDT, SELL sells a percentage of held BTC. The 10 USDT minimum order prevents dust orders after repeated 50% buys. A candle is evaluated once (keyed by its open time), even though `tick()` runs every second.
 
 **Chosen parameters (all shipped defaults; threshold and sizing are editable in the UI):**
@@ -32,7 +44,10 @@ Orders execute at the latest closed candle price. BUY spends a percentage of fre
 | WINDOW / HORIZON | 20 candles / 20 steps | Past closed candles fed to the LSTM / future steps projected (the trade signal uses step 1) |
 | EPOCHS_PER_CANDLE / LR | 30 epochs / 0.005 | BPTT passes and learning rate run on every new closed candle |
 | Initial dummy balance | 10,000.00 USDT, 0 BTC | Starting virtual capital |
-| Signal threshold | 0.01% (the test run that produced the screenshots used **0.002%**) | Minimum predicted move to trigger an order |
+| Threshold mode | adaptive | Percentile of recent `|changePct|` instead of a fixed value |
+| Target signals/min | 3 | Sets the quantile: `1 - 3 / candlesPerMinute` (0.95 on 1s candles) |
+| Adaptive window / warm-up | 60 candles / 20 samples | Rolling window size; below 20 samples the fixed threshold is used |
+| Fixed threshold | 0.01% | Used in fixed mode and as the warm-up fallback |
 | Trade size | BUY 50% of free USDT, SELL 100% of held BTC | Fixed-percentage order sizing |
 | Fee | 0.1% per order | Simulated taker fee, charged on every BUY and SELL |
 | Stop-loss / Take-profit | 0.5% / 0.5% from the average entry price (0 = off) | Risk exits checked each closed candle before the LSTM signal |
@@ -57,7 +72,7 @@ Unit tests (Node 22+, no dependencies to install):
 npm test
 ```
 
-This runs `node --test tests/*.test.js` (37 tests covering the wallet, signal/threshold logic, fees, risk exits, MAPE gate, input validation, persistence and CSV export).
+This runs `node --test tests/*.test.js` (54 tests covering the wallet, signal and adaptive-threshold logic, fees, risk exits, MAPE gate, input validation, persistence and CSV export).
 
 ## Test Results & Screenshots
 
@@ -77,22 +92,24 @@ The screenshots were produced by an automated headless Chromium run (fresh brows
 
 Initial state: ![Initial state](screenshots/0_Initial.png)
 
-**Setup.** Attempt A used the shipped defaults on the **1m** timeframe (threshold 0.01%, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off). It ran for the full 15-minute cap and produced **no trade at all**: over about 15 closed candles the forecast never moved more than 0.01% from the last close. Attempt B, which produced the screenshots, used the **1s** timeframe, 300 candles, window 20, and a lowered **threshold of 0.002%**; every other setting was the default. The bot was started at 01:29:49 (UTC); the first BUY filled on the 01:30:28 candle, about 40 seconds later, and the SELL two seconds after that. The unrolled graph in screenshot 3 was captured about 65 seconds after page load, once the layout had settled.
+**Setup.** The run used the shipped defaults with no override: **adaptive** threshold mode, target **3 signals/min**, fixed fallback 0.01%, the **1s** timeframe, 300 candles, window 20, buy 50%, sell 100%, fee 0.1%, SL 0.5%, TP 0.5%, MAPE gate off. The bot was started at 01:56:25 (UTC) and the screenshots were taken at about 02:00:16, after 3 min 51 s of running; the first BUY filled on the 02:00:05 candle and the SELL seven seconds later. The unrolled graph in screenshot 3 was captured well after page load, once the layout had settled. The readout in screenshot 1 reads "Threshold: 0.0051% (adaptive, p95 of last 60)": the 60-sample window was full and the 95th percentile of the last 60 forecast changes was 0.0051%.
 
-**Trades (attempt B, newest first; time = candle close, UTC):**
+**Trade rate.** This run produced **2 trades in about 3.85 minutes (about 0.5 trades/min)**. Other 3-minute runs at the same defaults gave 0 trades, then 6 trades (1, 4 and 1 per minute, 2.0/min on average). The adaptive rule targets signals (3/min), not trades: a signal is only a trade when the wallet allows it (a SELL signal while holding no BTC is a HOLD), and the measured signal rate was about 2/min rather than 3 because the forecast change is autocorrelated and its scale drifts, so the trailing percentile is only a rough estimate. The rate therefore varies a lot between runs.
+
+**Trades (newest first; time = candle close, UTC):**
 
 | Time | Side | Reason | Price | Qty (BTC) | Fee (USDT) | Forecast Δ% | USDT after | BTC after | Equity after |
 |---|---|---|---|---|---|---|---|---|---|
-| 01:30:30 | SELL | SIGNAL | 61,527.47 | 0.081176 | 4.99 | -0.0055 | 9,989.58 | 0.000000 | 9,989.58 |
-| 01:30:28 | BUY | SIGNAL | 61,532.69 | 0.081176 | 5.00 | +0.0025 | 5,000.00 | 0.081176 | 9,995.00 |
+| 02:00:12 | SELL | SIGNAL | 61,090.16 | 0.081750 | 4.99 | -0.0051 | 9,989.10 | 0.000000 | 9,989.10 |
+| 02:00:05 | BUY | SIGNAL | 61,101.27 | 0.081750 | 5.00 | +0.0044 | 5,000.00 | 0.081750 | 9,995.00 |
 
-**Final readouts (as in the screenshots).** Status Running, USDT 9,989.58, BTC 0.000000, position CASH, equity **9,989.58**, PnL **-10.42 USDT (-0.1042%)**, last signal HOLD (+0.0004%). Fees paid: 5.00 + 4.99 = **9.99 USDT**. The buy-and-hold benchmark stood at 9,985.59 USDT (**-14.41 USDT, -0.1441%**), so the bot was ahead of buy-and-hold by about 4.00 USDT. Over 65 predicted candles the LSTM MAPE was **0.008%** against **0.005%** for the repeat-last-close baseline.
+**Final readouts (as in the screenshots).** Status Running, USDT 9,989.10, BTC 0.000000, position CASH, equity **9,989.10**, PnL **-10.90 USDT (-0.1090%)**, last signal HOLD (-0.0069%), threshold 0.0051% (adaptive, p95 of last 60). Fees paid: 5.00 + 4.99 = **9.99 USDT**. The buy-and-hold benchmark stood at 9,976.99 USDT (**-23.01 USDT, -0.2301%**), so the bot was ahead of buy-and-hold by about 12.11 USDT. Over 222 predicted candles the LSTM MAPE was **0.006%** against **0.004%** for the repeat-last-close baseline. Last close 61,071.22 USDT.
 
 **Analysis.**
-- The bot is mechanically correct: the BUY spent 50% of the free USDT (5,000.00) and paid a 0.1% fee on it (5.00), and the SELL emptied the BTC holding exactly to 0 and paid a 0.1% fee on the proceeds (4.99). Equity after the BUY is 9,995.00 (the entry fee), and after the SELL 9,990.00.
-- The SELL filled 5.22 USDT per BTC below the BUY (61,532.69 to 61,527.47), costing 0.42 USDT on 0.081176 BTC. Together with the two fees (9.99 USDT) this explains the whole loss of 10.42 USDT. The trades were triggered by forecast deltas of +0.0025% and -0.0055%, far below the 0.2% cost of a round trip at a 0.1% fee, so a threshold this low is only useful to demonstrate the mechanics.
-- The equity chart shows the bot line flat at 0 until the BUY, because an all-cash wallet has constant equity, then dropping by the entry fee and the exit loss. The bot beat buy-and-hold only because it sat in cash while BTC drifted down during the run; this is the direction of the market, not evidence of skill. A single two-trade run is not statistical evidence either way.
-- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. Its MAPE (0.008%) is *worse* than the trivial "next price = last close" baseline (0.005%), and the same pattern appeared in every other accuracy check taken during development (for example 0.011% vs 0.008%, 0.007% vs 0.004%, 0.004% vs 0.003%). At these horizons price changes are close to a random walk, so a forecast that does not beat the naive baseline carries no exploitable information; the 20-step forecast curve at the right of the price chart (a rise to 61,559.62) is an extrapolation of recent noise, and the BUY/SELL signals are essentially noise crossing a very low threshold. With the shipped 0.01% threshold the bot simply stayed in HOLD on the 1m run (attempt A), which is the more sensible behavior. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal.
+- The bot is mechanically correct: the BUY spent 50% of the free USDT (5,000.00) and paid a 0.1% fee on it (5.00), and the SELL emptied the BTC holding exactly to 0 and paid a 0.1% fee on the proceeds (4.99). Equity after the BUY is 9,995.00 (the entry fee), and after the SELL 9,989.10.
+- The SELL filled 11.11 USDT per BTC below the BUY (61,101.27 to 61,090.16), costing 0.91 USDT on 0.081750 BTC. Together with the two fees (9.99 USDT) this explains the whole loss of 10.90 USDT. The trades were triggered by forecast deltas of +0.0044% and -0.0051%, far below the 0.2% cost of a round trip at a 0.1% fee: the adaptive threshold controls how often the bot trades, not whether a trade is profitable, and at this scale every round trip loses to fees unless the price happens to move by more than about 0.2%.
+- The equity chart shows the bot line flat at 0 until the BUY, because an all-cash wallet has constant equity, then dropping by the entry fee and the exit loss. The bot beat buy-and-hold only because it sat in cash while BTC drifted down during the run (the price fell throughout the chart window); this is the direction of the market, not evidence of skill. A single two-trade run is not statistical evidence either way.
+- **Honest assessment of the model.** The LSTM is a single cell with 14 trainable parameters, trained online for 30 epochs on a few hundred 1-second or 1-minute returns. Its MAPE (0.006%) is *worse* than the trivial "next price = last close" baseline (0.004%), and the same pattern appeared in every other accuracy check taken during development (for example 0.011% vs 0.008%, 0.007% vs 0.004%, 0.004% vs 0.003%). At these horizons price changes are close to a random walk, so a forecast that does not beat the naive baseline carries no exploitable information; the 20-step forecast curve at the right of the price chart (a fall to 60,978.21) is an extrapolation of recent noise, and the BUY/SELL signals are essentially noise crossing a threshold that is by construction exceeded by about the top 5% of recent forecasts. A fixed 0.01% threshold would have kept the bot in HOLD (see the change list below), which would have avoided fees but also produced no trades to evaluate. Enabling the **MAPE gate** would have kept the bot out of the market in this run, because the LSTM did not beat the baseline. This is an educational demo, not a trading signal.
 
 ## Changes from the Provided Source Code & Why
 
@@ -119,7 +136,7 @@ The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.
    * **Why**: Reuses the reference `trainAndForecast()` pipeline as the lab requires instead of duplicating it, with minimal edits to a reference file.
 
 6. **`package.json`, `tests/*.test.js`, `.gitignore` (new): verification**
-   * **Change**: `npm test` runs the Node test runner over 37 tests (wallet, bot, storage, CSV); `.gitignore` excludes `node_modules/`.
+   * **Change**: `npm test` runs the Node test runner over 54 tests (wallet, bot, storage, CSV); `.gitignore` excludes `node_modules/`.
    * **Why**: Proves the wallet and signal rules (dust, invalid input, duplicate candles, exact-zero sell, corrupt storage) without a browser.
 
 ### Innovations (beyond the lab requirements)
@@ -153,3 +170,9 @@ The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.
 13. **`bot-ui.js` / `index.html` (fix): "No trades yet" message**
     * **Change**: A message below the trade table is shown while the trade list is empty and hidden after the first trade (set with `hidden`, no HTML injection).
     * **Why**: With no trades the wallet is all cash, so equity is constant and the equity chart is a flat 0 line; the message explains that this is expected until the forecast change crosses the threshold.
+
+### Adaptive threshold
+
+14. **`trading-bot.js`, `storage.js`, `bot-ui.js`, `index.html`, `app.js` (change): adaptive percentile threshold**
+    * **Change**: A new default threshold mode that sets the threshold to a rolling percentile of the last 60 `|changePct|` values so that about 3 candles per minute exceed it (quantile `1 - target / candlesPerMinute`), with a 20-sample warm-up that falls back to the fixed threshold. The window is cleared on a timeframe change and on Reset and is persisted. The panel gains a mode selector, a "Target signals/min" input, the renamed "Fixed threshold (%)" input and a live "Threshold: ..." readout. `app.js` passes `intervalMs` to the bot (one line).
+    * **Why**: Measured over 150 s on 1s candles, `|changePct|` had p50 0.0010%, p75 0.0018%, p90 0.0038%, p95 0.0046% and a maximum of 0.0068%, so the fixed default of 0.01% never fires and the earlier test run needed a hand-lowered threshold. No single fixed value holds a steady rate because the volatility drifts; a rolling percentile follows it.
