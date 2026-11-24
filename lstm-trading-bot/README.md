@@ -62,8 +62,8 @@ Orders execute at the latest closed candle price. BUY spends a percentage of fre
 Requires a modern browser and internet access (market data and the bzUI library are loaded from public CDNs). No build step.
 
 ```bash
-git clone <this-repository-url>
-cd <repository>/lstm-trading-bot
+git clone https://github.com/MirkoLouis/ITD105.git
+cd ITD105/lstm-trading-bot
 python3 -m http.server 8000
 ```
 
@@ -117,7 +117,7 @@ Initial state: ![Initial state](screenshots/0_Initial.png)
 
 ## Changes from the Provided Source Code & Why
 
-The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.js`, `LICENSE`) were first committed unmodified, so `git diff` shows exactly what was changed. The LSTM math in `tiny-lstm.js` was not touched; `unroll-graph.js` received only the small layout fix listed as change 11. Reference files keep their 2-space indentation; new files use 4 spaces.
+The five reference files (`index.html`, `app.js`, `tiny-lstm.js`, `unroll-graph.js`, `LICENSE`) were first committed unmodified, so `git diff` shows exactly what was changed. The LSTM math in `tiny-lstm.js` was not touched; `unroll-graph.js` received only small layout fixes (change 11, plus the vertical margin in change 14). Reference files keep their 2-space indentation; new files use 4 spaces.
 
 1. **`app.js` (fix): live indicator never turned on**
    * **Change**: In `tick()`, after a successful update, added `liveEl.dataset.state = 'on'`.
